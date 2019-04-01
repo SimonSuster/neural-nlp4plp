@@ -5,7 +5,16 @@ import os
 from os import makedirs
 from os.path import exists, join, realpath
 
+import numpy as np
 import torch
+from torch import nn
+
+long_tensor_type = torch.LongTensor
+float_tensor_type = torch.FloatTensor
+
+if (torch.cuda.is_available()):
+    long_tensor_type = torch.cuda.LongTensor
+    float_tensor_type = torch.cuda.FloatTensor
 
 
 class TorchUtils:
@@ -117,3 +126,39 @@ def get_file_list(topdir, identifiers=None, all_levels=False):
                 filelist.append(fullname)
 
     return filelist
+
+
+def load_emb(fname, word_idx, freeze=False):
+    pretr_embs, pretr_emb_idx, n = load_w2v(fname)
+    # build rep. for entities by averaging word vectors
+    embs = np.random.normal(size=(len(word_idx)+1, n), loc=0, scale=0.1)
+    embs = update_vectors(pretr_embs, pretr_emb_idx, embs, word_idx)
+    embs_tensor = nn.Embedding.from_pretrained(float_tensor_type(embs), freeze=freeze)
+
+    return embs_tensor, n
+
+
+def load_w2v(fn):
+    emb_idx = {}
+    with open(fn) as fh:
+        m, n = map(eval, fh.readline().strip().split())
+        e_m = np.random.normal(size=(m, n), loc=0, scale=0.1)
+        for c, l in enumerate(fh):
+            w, *e = l.strip().split()
+            if len(e) != n:
+                print("Incorrect embedding dimension, skipping.")
+                continue
+            if not w or not e:
+                print("Empty w or e.")
+            emb_idx[w] = c
+            e_m[c] = e
+    return e_m, emb_idx, n
+
+
+def update_vectors(pretr_embs, pretr_emb_idx, embs, word_idx):
+    c = 0
+    for w, i in word_idx.items():
+        if w not in pretr_emb_idx:
+            continue
+        embs[i] = pretr_embs[pretr_emb_idx[w]]
+    return embs

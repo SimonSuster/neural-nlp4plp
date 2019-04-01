@@ -4,14 +4,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, mean_squared_error
 
-from util import TorchUtils
+from util import TorchUtils, load_emb
 
 
 class LSTMClassifier(nn.Module):
     # based on https://github.com/MadhumitaSushil/sepsis/blob/master/src/classifiers/lstm.py
     # TODO clip gradients
 
-    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, label_size, batch_size):
+    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, label_size, batch_size, word_idx, pretrained_emb_path):
 
         super(LSTMClassifier, self).__init__()
 
@@ -22,6 +22,8 @@ class LSTMClassifier(nn.Module):
         self.dropout = dropout
         self.batch_size = batch_size
         self.n_labels = label_size
+        self.word_idx = word_idx
+        self.pretrained_emb_path = pretrained_emb_path
 
         if torch.cuda.is_available():
             self.device = torch.device('cuda:0')
@@ -31,8 +33,14 @@ class LSTMClassifier(nn.Module):
         self.hidden_in = self.init_hidden()  # initialize cell states
 
         # self.word_embeddings = nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx).to(self.device) #embedding layer, initialized at random
-        self.word_embeddings = nn.Embedding(self.vocab_size, self.emb_dim,
-                                            padding_idx=padding_idx)  # embedding layer, initialized at random
+        if pretrained_emb_path is not None:
+            self.word_embeddings, dim = load_emb(pretrained_emb_path, word_idx, freeze=False)
+            assert dim == self.emb_dim
+        else:
+            self.word_embeddings = nn.Embedding(self.vocab_size, self.emb_dim,
+                                                padding_idx=padding_idx)  # embedding layer, initialized at random
+
+
 
         self.lstm = nn.LSTM(self.emb_dim, self.hidden_dim, num_layers=self.n_lstm_layers,
                             dropout=self.dropout)  # lstm layers
@@ -164,7 +172,9 @@ class LSTMClassifier(nn.Module):
                       'embedding_dim': self.emb_dim,
                       'dropout': self.dropout,
                       'label_size': self.n_labels,
-                      'batch_size': self.batch_size
+                      'batch_size': self.batch_size,
+                      'word_idx': self.word_idx,
+                      'pretrained_emb_path': self.pretrained_emb_path
                       }
 
         # save model state
@@ -188,7 +198,7 @@ class LSTMClassifier(nn.Module):
 class LSTMRegression(LSTMClassifier):
     # TODO clip gradients
 
-    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size):
+    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size, word_idx, pretrained_emb_path):
 
         super(LSTMClassifier, self).__init__()
 
@@ -198,6 +208,8 @@ class LSTMRegression(LSTMClassifier):
         self.emb_dim = embedding_dim
         self.dropout = dropout
         self.batch_size = batch_size
+        self.word_idx = word_idx
+        self.pretrained_emb_path = pretrained_emb_path
 
         if torch.cuda.is_available():
             self.device = torch.device('cuda:0')
@@ -206,15 +218,18 @@ class LSTMRegression(LSTMClassifier):
 
         self.hidden_in = self.init_hidden()  # initialize cell states
 
-        # self.word_embeddings = nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx).to(self.device) #embedding layer, initialized at random
-        self.word_embeddings = nn.Embedding(self.vocab_size, self.emb_dim,
-                                            padding_idx=padding_idx)  # embedding layer, initialized at random
+        if pretrained_emb_path is not None:
+            self.word_embeddings, dim = load_emb(pretrained_emb_path, word_idx, freeze=False)
+            assert dim == self.emb_dim
+        else:
+            self.word_embeddings = nn.Embedding(self.vocab_size, self.emb_dim,
+                                                padding_idx=padding_idx)  # embedding layer, initialized at random
 
         self.lstm = nn.LSTM(self.emb_dim, self.hidden_dim, num_layers=self.n_lstm_layers,
                             dropout=self.dropout)  # lstm layers
 
         self.hidden2label = nn.Linear(self.hidden_dim, 1)  # hidden to output node
-
+        #self.sigmoid = nn.Sigmoid()
         self.to(self.device)
 
     def forward(self, sentence, sent_lengths, hidden):
@@ -225,7 +240,7 @@ class LSTMRegression(LSTMClassifier):
 
         # truncating the batch length if last batch has fewer elements
         cur_batch_len = len(sent_lengths)
-        hidden = (hidden[0][:, :cur_batch_len, :], hidden[1][:, :cur_batch_len, :])
+        hidden = (hidden[0][:, :cur_batch_len, :].contiguous(), hidden[1][:, :cur_batch_len, :].contiguous())
 
         # view reshapes the data to the given dimensions. -1: infer from the rest. We want (seq_len * batch_size * input_size)
         # embs = embeds.view(sentence.shape[0], sentence.shape[1], -1)
@@ -247,7 +262,7 @@ class LSTMRegression(LSTMClassifier):
         # If sequence len is constant, using hidden[0] is the same as lstm_out[-1].
         # For variable len seq, use hidden[0] for the hidden state at last valid timestep. Do it for the last hidden layer
         y = self.hidden2label(hidden[0][-1])
-
+        #y = self.sigmoid(y)
         return y
 
     def loss(self, fwd_out, target):
@@ -323,7 +338,9 @@ class LSTMRegression(LSTMClassifier):
                       'padding_idx': self.word_embeddings.padding_idx,
                       'embedding_dim': self.emb_dim,
                       'dropout': self.dropout,
-                      'batch_size': self.batch_size
+                      'batch_size': self.batch_size,
+                      'word_idx': self.word_idx,
+                      'pretrained_emb_path': self.pretrained_emb_path
                       }
 
         # save model state

@@ -25,7 +25,7 @@ def main():
     arg_parser.add_argument("--n-bins", type=int, default=10, help="number of bins for discretization of answers")
     arg_parser.add_argument("--n-layers", type=int, default=1, help="number of layers for the RNN")
     arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
-    arg_parser.add_argument("--pretrained-word-embed", type=str,
+    arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
     arg_parser.add_argument("--save-model", action="store_true")
     #arg_parser.add_argument("--test", type=int, default=1)
@@ -52,39 +52,43 @@ def main():
     else:
         raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec'")
 
-
-    if args.model == "lstm-enc-discrete-dec":
-        # initialize vocab
-        corpus_encoder = Nlp4plpEncoder.from_corpus(train_corp, dev_corp)
-        net_params = {'n_layers': args.n_layers,
-                      'hidden_dim': args.hidden_dim,
-                      'vocab_size': corpus_encoder.vocab.size,
-                      'padding_idx': corpus_encoder.vocab.pad,
-                      'embedding_dim': args.embed_size,
-                      'dropout': args.dropout,
-                      'label_size': label_size,
-                      'batch_size': args.batch_size
-                      }
-        classifier = LSTMClassifier(**net_params)
-        eval_score = accuracy_score
-    elif args.model == "lstm-enc-regression-dec":
-        # initialize vocab
-        corpus_encoder = Nlp4plpRegressionEncoder.from_corpus(train_corp, dev_corp)
-        net_params = {'n_layers': args.n_layers,
-                      'hidden_dim': args.hidden_dim,
-                      'vocab_size': corpus_encoder.vocab.size,
-                      'padding_idx': corpus_encoder.vocab.pad,
-                      'embedding_dim': args.embed_size,
-                      'dropout': args.dropout,
-                      'batch_size': args.batch_size
-                      }
-        classifier = LSTMRegression(**net_params)
-        eval_score = mean_absolute_error
-    else:
-        raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec'")
-
     test_score_runs = []
     for n in range(args.n_runs):
+
+        if args.model == "lstm-enc-discrete-dec":
+            # initialize vocab
+            corpus_encoder = Nlp4plpEncoder.from_corpus(train_corp, dev_corp)
+            net_params = {'n_layers': args.n_layers,
+                          'hidden_dim': args.hidden_dim,
+                          'vocab_size': corpus_encoder.vocab.size,
+                          'padding_idx': corpus_encoder.vocab.pad,
+                          'embedding_dim': args.embed_size,
+                          'dropout': args.dropout,
+                          'label_size': label_size,
+                          'batch_size': args.batch_size,
+                          'word_idx': corpus_encoder.vocab.word2idx,
+                          'pretrained_emb_path': args.pretrained_emb_path
+                          }
+            classifier = LSTMClassifier(**net_params)
+            eval_score = accuracy_score
+        elif args.model == "lstm-enc-regression-dec":
+            # initialize vocab
+            corpus_encoder = Nlp4plpRegressionEncoder.from_corpus(train_corp, dev_corp)
+            net_params = {'n_layers': args.n_layers,
+                          'hidden_dim': args.hidden_dim,
+                          'vocab_size': corpus_encoder.vocab.size,
+                          'padding_idx': corpus_encoder.vocab.pad,
+                          'embedding_dim': args.embed_size,
+                          'dropout': args.dropout,
+                          'batch_size': args.batch_size,
+                          'word_idx': corpus_encoder.vocab.word2idx,
+                          'pretrained_emb_path': args.pretrained_emb_path
+                          }
+            classifier = LSTMRegression(**net_params)
+            eval_score = mean_absolute_error
+        else:
+            raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec'")
+
         optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
 
         classifier.train_model(train_corp, dev_corp, corpus_encoder, args.epochs, optimizer)
@@ -105,6 +109,7 @@ def main():
         print('TEST SCORE: %.3f' % test_acc)
         test_score_runs.append(test_acc)
     print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
+
 
 if __name__ == '__main__':
     main()
