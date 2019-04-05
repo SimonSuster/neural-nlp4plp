@@ -2,10 +2,19 @@ import argparse
 
 import numpy as np
 import torch
-from sklearn.metrics import accuracy_score, mean_squared_error, mean_absolute_error
+from sklearn.metrics import accuracy_score, mean_absolute_error
 
-from corpus_util import DataUtils, Corpus, CorpusEncoder, Nlp4plpCorpus, Nlp4plpEncoder, Nlp4plpRegressionEncoder
+from corpus_util import Nlp4plpCorpus, Nlp4plpEncoder, Nlp4plpRegressionEncoder
 from net import LSTMClassifier, LSTMRegression
+
+
+def print_correct(test_corp, y_pred, bin_edges):
+    print("Correctly predicted discrete classes:")
+    for inst, pred in zip(test_corp.insts, y_pred):
+        if inst.ans_discrete == pred:
+            print(f"bin: {tuple(bin_edges[pred:pred+2])}")
+            print(f"id: {inst.id}")
+            print(f"{' '.join(inst.txt)}\n")
 
 
 def main():
@@ -18,18 +27,19 @@ def main():
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
     arg_parser.add_argument("--hidden-dim", type=int, default=50, help="")
-    #arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")
+    # arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
-    #arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
+    # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
     arg_parser.add_argument("--model", type=str, help="lstm-enc-discrete-dec | lstm-enc-regression-dec")
     arg_parser.add_argument("--n-bins", type=int, default=10, help="number of bins for discretization of answers")
     arg_parser.add_argument("--n-layers", type=int, default=1, help="number of layers for the RNN")
     arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
+    arg_parser.add_argument("--print-correct")
     arg_parser.add_argument("--save-model", action="store_true")
-    #arg_parser.add_argument("--test", type=int, default=1)
-    #arg_parser.add_argument("--train", type=int, default=1)
+    # arg_parser.add_argument("--test", type=int, default=1)
+    # arg_parser.add_argument("--train", type=int, default=1)
     args = arg_parser.parse_args()
 
     # initialize corpora
@@ -43,18 +53,17 @@ def main():
         test_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
     elif args.model == "lstm-enc-regression-dec":
         train_corp = Nlp4plpCorpus(args.data_dir + "train")
-        #train_corp.discretize(n_bins=args.n_bins)
-        #label_size = len({inst.ans_discrete for inst in train_corp.insts})
+        # train_corp.discretize(n_bins=args.n_bins)
+        # label_size = len({inst.ans_discrete for inst in train_corp.insts})
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
-        #dev_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
+        # dev_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
         test_corp = Nlp4plpCorpus(args.data_dir + "test")
-        #test_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
+        # test_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
     else:
         raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec'")
 
     test_score_runs = []
     for n in range(args.n_runs):
-
         if args.model == "lstm-enc-discrete-dec":
             # initialize vocab
             corpus_encoder = Nlp4plpEncoder.from_corpus(train_corp, dev_corp)
@@ -106,6 +115,8 @@ def main():
 
         # compute scoring metrics
         test_acc = eval_score(y_true=y_true, y_pred=y_pred)
+        if args.print_correct is not None and args.model == "lstm-enc-discrete-dec":
+            print_correct(test_corp, y_pred, test_corp.fitted_discretizer.bin_edges_[0])
         print('TEST SCORE: %.3f' % test_acc)
         test_score_runs.append(test_acc)
     print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))

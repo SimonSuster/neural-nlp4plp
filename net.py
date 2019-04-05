@@ -11,7 +11,8 @@ class LSTMClassifier(nn.Module):
     # based on https://github.com/MadhumitaSushil/sepsis/blob/master/src/classifiers/lstm.py
     # TODO clip gradients
 
-    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, label_size, batch_size, word_idx, pretrained_emb_path):
+    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, label_size, batch_size,
+                 word_idx, pretrained_emb_path):
 
         super(LSTMClassifier, self).__init__()
 
@@ -39,8 +40,6 @@ class LSTMClassifier(nn.Module):
         else:
             self.word_embeddings = nn.Embedding(self.vocab_size, self.emb_dim,
                                                 padding_idx=padding_idx)  # embedding layer, initialized at random
-
-
 
         self.lstm = nn.LSTM(self.emb_dim, self.hidden_dim, num_layers=self.n_lstm_layers,
                             dropout=self.dropout)  # lstm layers
@@ -198,7 +197,8 @@ class LSTMClassifier(nn.Module):
 class LSTMRegression(LSTMClassifier):
     # TODO clip gradients
 
-    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size, word_idx, pretrained_emb_path):
+    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size, word_idx,
+                 pretrained_emb_path):
 
         super(LSTMClassifier, self).__init__()
 
@@ -229,7 +229,7 @@ class LSTMRegression(LSTMClassifier):
                             dropout=self.dropout)  # lstm layers
 
         self.hidden2label = nn.Linear(self.hidden_dim, 1)  # hidden to output node
-        #self.sigmoid = nn.Sigmoid()
+        # self.sigmoid = nn.Sigmoid()
         self.to(self.device)
 
     def forward(self, sentence, sent_lengths, hidden):
@@ -262,7 +262,7 @@ class LSTMRegression(LSTMClassifier):
         # If sequence len is constant, using hidden[0] is the same as lstm_out[-1].
         # For variable len seq, use hidden[0] for the hidden state at last valid timestep. Do it for the last hidden layer
         y = self.hidden2label(hidden[0][-1])
-        #y = self.sigmoid(y)
+        # y = self.sigmoid(y)
         return y
 
     def loss(self, fwd_out, target):

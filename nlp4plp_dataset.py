@@ -9,15 +9,6 @@ import numpy as np
 from corpus_util import Nlp4plpCorpus
 
 
-def get_ans_dist(data):
-    """
-    :param data: a list of Nlp4plpInst objects
-    """
-    dist = Counter([d.ans for d in data])
-
-    return dist
-
-
 def create_splits(data_dir, data_dir_out):
     train_out_dir = data_dir_out + "/train/"
     dev_out_dir = data_dir_out + "/dev/"
@@ -57,6 +48,28 @@ def create_splits(data_dir, data_dir_out):
     print(f"Split {corp_len} files into {data_dir_out}")
 
 
+def get_ans_dist(data):
+    """
+    :param data: a list of Nlp4plpInst objects
+    """
+    dist = Counter([d.ans for d in data])
+
+    return dist
+
+
+def get_vocab_dist(data):
+    """
+    :param data: a list of Nlp4plpInst objects
+    """
+    dist = Counter([w for d in data for w in d.txt])
+
+    return dist
+
+
+def get_avg_sen_len(data):
+    return np.mean([len(d.txt) for d in data])
+
+
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser(description="")
     arg_parser.add_argument("--data-dir", type=str,
@@ -64,9 +77,16 @@ if __name__ == "__main__":
                             help="path to folder from where data is loaded")
     args = arg_parser.parse_args()
 
-    d=Nlp4plpCorpus(args.data_dir)
+    d = Nlp4plpCorpus(args.data_dir)
     insts = d.insts
-    ans_dist = get_ans_dist(insts).most_common()
-    print(ans_dist)
 
-    #create_splits(args.data_dir, "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits/")
+    ans_dist = get_ans_dist(insts)
+    print(f"Most common answers: {ans_dist.most_common(10)}")
+
+    vocab_dist = get_vocab_dist(insts)
+    print(f"Most common vocab items: {vocab_dist.most_common(10)}")
+    print(f"Vocab size: {len(vocab_dist)}")
+    print(f"Dataset (problem/text) size: {sum(vocab_dist.values())}")
+    avg_sen_len = get_avg_sen_len(insts)
+    print(f"Avg sen len: {avg_sen_len}")
+    # create_splits(args.data_dir, "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits/")
