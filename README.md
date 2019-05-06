@@ -2,7 +2,6 @@
 This repository currently contains a pytorch implementation of LSTM and two different decoders, a discrete (n-bin) classifier and a regression component.
 
 We use the data developed in the [nlp4plp project](https://dtai.cs.kuleuven.be/problog/natural_language).
-The tasks are from the [bAbI](http://arxiv.org/abs/1502.05698) dataset.
 
 ## Requirements
 - Python 3.6 or higher
@@ -14,5 +13,5 @@ The tasks are from the [bAbI](http://arxiv.org/abs/1502.05698) dataset.
 ## Usage
 Train and Evaluate model
 ```
-python main.py --train 1 --lr 0.001 --hops 3 --eval 1 --saved-model-dir ./saved/ --data-dir ./data/tasks_1-20_v1-2/en-10k --task-number 1
+python3.7 main.py --data-dir /mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits/ --model lstm-enc-discrete-dec --pretrained-emb-path /mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/news_embs/embs/1/embeddings --n-bins 20 --epochs 30 --n-runs 5
 ```
