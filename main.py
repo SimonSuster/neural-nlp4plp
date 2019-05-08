@@ -8,13 +8,12 @@ from corpus_util import Nlp4plpCorpus, Nlp4plpEncoder, Nlp4plpRegressionEncoder
 from net import LSTMClassifier, LSTMRegression
 
 
-def print_correct(test_corp, y_pred, bin_edges):
-    print("Correctly predicted discrete classes:")
+def get_correct_problems(test_corp, y_pred, bin_edges):
+    correct = set()
     for inst, pred in zip(test_corp.insts, y_pred):
         if inst.ans_discrete == pred:
-            print(f"bin: {tuple(bin_edges[pred:pred+2])}")
-            print(f"id: {inst.id}")
-            print(f"{' '.join(inst.txt)}\n")
+            correct.add(f"bin: {tuple(bin_edges[pred:pred+2])}\nid: {inst.id}\n{' '.join(inst.txt)}\n")
+    return correct
 
 
 def main():
@@ -36,7 +35,7 @@ def main():
     arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
-    arg_parser.add_argument("--print-correct")
+    arg_parser.add_argument("--print-correct", action="store_true")
     arg_parser.add_argument("--save-model", action="store_true")
     # arg_parser.add_argument("--test", type=int, default=1)
     # arg_parser.add_argument("--train", type=int, default=1)
@@ -116,7 +115,8 @@ def main():
         # compute scoring metrics
         test_acc = eval_score(y_true=y_true, y_pred=y_pred)
         if args.print_correct is not None and args.model == "lstm-enc-discrete-dec":
-            print_correct(test_corp, y_pred, test_corp.fitted_discretizer.bin_edges_[0])
+            correct = get_correct_problems(test_corp, y_pred, test_corp.fitted_discretizer.bin_edges_[0])
+            print(correct)
         print('TEST SCORE: %.3f' % test_acc)
         test_score_runs.append(test_acc)
     print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
