@@ -36,7 +36,6 @@ class Encoder(nn.Module):
 
         self.lstm = nn.LSTM(self.emb_dim, self.hidden_dim, num_layers=self.n_lstm_layers,
                             dropout=self.dropout)  # lstm layers
-
         self.to(self.device)
 
     def init_hidden(self):
@@ -47,10 +46,6 @@ class Encoder(nn.Module):
         c0 = torch.zeros(self.n_lstm_layers, self.batch_size, self.hidden_dim).to(self.device)
 
         return (h0, c0)
-
-#    def detach_hidden_(self):
-#        self.hidden_in[0].detach_()
-#        self.hidden_in[1].detach_()
 
     def forward(self, sentence, sent_lengths, hidden):
         sort, unsort = TorchUtils.get_sort_unsort(sent_lengths)
@@ -97,7 +92,7 @@ class LSTMClassifier(nn.Module):
             self.device = torch.device('cpu')
 
         self.encoder = Encoder(n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
-                 word_idx, pretrained_emb_path)
+                               word_idx, pretrained_emb_path)
         self.hidden2label = nn.Linear(self.hidden_dim, self.n_labels)  # hidden to output layer
         self.to(self.device)
 
@@ -144,10 +139,6 @@ class LSTMClassifier(nn.Module):
                 optimizer.zero_grad()  # reset tensor gradients
                 loss.backward()  # compute gradients for network params w.r.t loss
                 optimizer.step()  # perform the gradient update step
-
-                # detach hidden nodes from the graph. IMP to prevent the graph from growing.
-                #self.detach_hidden_()
-
                 running_loss += loss.item()
             y_pred, y_true = self.predict(dev_corpus, corpus_encoder)
             self.train()  # set back the train mode
@@ -158,22 +149,16 @@ class LSTMClassifier(nn.Module):
             print('ep %d, loss: %.3f, dev_acc: %.3f' % (i, running_loss, dev_acc))
 
     def predict(self, corpus, corpus_encoder):
-
         self.eval()
-
         y_pred = list()
         y_true = list()
 
         for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size)):
             cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
-
             y_true.extend(cur_labels.cpu().numpy())
-
-            #self.detach_hidden_()
 
             # forward pass
             fwd_out = self.forward(cur_insts, cur_lengths)
-
             __, cur_preds = torch.max(fwd_out.detach(), 1)  # first return value is the max value, second is argmax
             y_pred.extend(cur_preds.cpu().numpy())
 
@@ -238,7 +223,7 @@ class LSTMRegression(nn.Module):
                                                 padding_idx=padding_idx)  # embedding layer, initialized at random
 
         self.encoder = Encoder(n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
-                 word_idx, pretrained_emb_path)
+                               word_idx, pretrained_emb_path)
 
         self.hidden2label = nn.Linear(self.hidden_dim, 1)  # hidden to output node
         # self.sigmoid = nn.Sigmoid()
@@ -284,10 +269,6 @@ class LSTMRegression(nn.Module):
                 optimizer.zero_grad()  # reset tensor gradients
                 loss.backward()  # compute gradients for network params w.r.t loss
                 optimizer.step()  # perform the gradient update step
-
-                # detach hidden nodes from the graph. IMP to prevent the graph from growing.
-                #self.detach_hidden_()
-
                 running_loss += loss.item()
             y_pred, y_true = self.predict(dev_corpus, corpus_encoder)
             self.train()  # set back the train mode
@@ -298,22 +279,16 @@ class LSTMRegression(nn.Module):
             print('ep %d, loss: %.3f, dev_mse: %.3f' % (i, running_loss, dev_mse))
 
     def predict(self, corpus, corpus_encoder):
-
         self.eval()
-
         y_pred = list()
         y_true = list()
 
         for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size)):
             cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
-
             y_true.extend(cur_labels.cpu().numpy())
-
-            #self.detach_hidden_()
 
             # forward pass
             fwd_out = self.forward(cur_insts, cur_lengths)
-
             cur_preds = fwd_out.detach()
             y_pred.extend(cur_preds.cpu().numpy())
 

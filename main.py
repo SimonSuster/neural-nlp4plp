@@ -52,12 +52,8 @@ def main():
         test_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
     elif args.model == "lstm-enc-regression-dec":
         train_corp = Nlp4plpCorpus(args.data_dir + "train")
-        # train_corp.discretize(n_bins=args.n_bins)
-        # label_size = len({inst.ans_discrete for inst in train_corp.insts})
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
-        # dev_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
         test_corp = Nlp4plpCorpus(args.data_dir + "test")
-        # test_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
     else:
         raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec'")
 

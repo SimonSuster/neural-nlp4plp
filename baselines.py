@@ -80,11 +80,11 @@ if __name__ == "__main__":
         eval_score = mean_absolute_error
         corpus_encoder = Nlp4plpRegressionEncoder.from_corpus(train_corp)
         classifier_params = {'vocab_size': corpus_encoder.vocab.size,
-                      'padding_idx': corpus_encoder.vocab.pad,
-                      'embedding_dim': args.embed_size,
-                      'word_idx': corpus_encoder.vocab.word2idx,
-                      'pretrained_emb_path': args.pretrained_emb_path
-                      }
+                             'padding_idx': corpus_encoder.vocab.pad,
+                             'embedding_dim': args.embed_size,
+                             'word_idx': corpus_encoder.vocab.word2idx,
+                             'pretrained_emb_path': args.pretrained_emb_path
+                             }
 
         classifier = NNEmb(**classifier_params)
 
@@ -93,5 +93,3 @@ if __name__ == "__main__":
     y_pred, y_true = classifier.predict(test_corp, corpus_encoder, train_embs, y_train)
     test_acc = eval_score(y_true=y_true, y_pred=y_pred)
     print('TEST SCORE: %.3f' % test_acc)
-
-

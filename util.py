@@ -105,6 +105,7 @@ class Nlp4plpData:
         with open(realpath(fpath)) as f:
             return f.readlines()
 
+
 def get_file_list(topdir, identifiers=None, all_levels=False):
     """
     :param identifiers: a list of strings, any of which should be in the filename
@@ -131,7 +132,7 @@ def get_file_list(topdir, identifiers=None, all_levels=False):
 def load_emb(fname, word_idx, freeze=False):
     pretr_embs, pretr_emb_idx, n = load_w2v(fname)
     # build rep. for entities by averaging word vectors
-    embs = np.random.normal(size=(len(word_idx)+1, n), loc=0, scale=0.1)
+    embs = np.random.normal(size=(len(word_idx) + 1, n), loc=0, scale=0.1)
     embs = update_vectors(pretr_embs, pretr_emb_idx, embs, word_idx)
     embs_tensor = nn.Embedding.from_pretrained(float_tensor_type(embs), freeze=freeze)
 

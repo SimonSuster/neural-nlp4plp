@@ -1,12 +1,11 @@
 import json
-import re
 from os.path import realpath, join
 
 import numpy as np
 import torch
+from nltk.tokenize import word_tokenize
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, KBinsDiscretizer
-from nltk.tokenize import word_tokenize
 
 from util import FileUtils, get_file_list, Nlp4plpData
 
@@ -75,7 +74,7 @@ def dummy_processor(line):
     return line.strip().split()
 
 
-#def discretize_labels(fit_labels, transform_labels):
+# def discretize_labels(fit_labels, transform_labels):
 def discretizer(fit_labels, n_bins):
     # sklearn requires a 2D array
     fit_labels = fit_labels.reshape(-1, 1)
@@ -86,7 +85,7 @@ def discretizer(fit_labels, n_bins):
     le = KBinsDiscretizer(n_bins=n_bins, encode="ordinal", strategy="quantile")
     le.fit(fit_labels)
     return le
-    #return le.transform(transform_labels), le
+    # return le.transform(transform_labels), le
 
 
 def encode_labels(fit_labels, transform_labels):
@@ -161,6 +160,7 @@ class Nlp4plpCorpus:
         for ans_discrete, inst in zip(anss_discrete, self.insts):
             inst.ans_discrete = ans_discrete
         self.fitted_discretizer = fitted_discretizer
+
 
 class Corpus:
     def __init__(self, dir_corpus, f_labels, dir_labels, fname_subset, text_processor=dummy_processor,
