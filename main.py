@@ -114,7 +114,7 @@ def main():
 
         # compute scoring metrics
         test_acc = eval_score(y_true=y_true, y_pred=y_pred)
-        if args.print_correct is not None and args.model == "lstm-enc-discrete-dec":
+        if not args.print_correct and args.model == "lstm-enc-discrete-dec":
             correct = get_correct_problems(test_corp, y_pred, test_corp.fitted_discretizer.bin_edges_[0])
             print(correct)
         print('TEST SCORE: %.3f' % test_acc)

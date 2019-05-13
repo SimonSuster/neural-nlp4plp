@@ -11,7 +11,16 @@ We use the data developed in the [nlp4plp project](https://dtai.cs.kuleuven.be/p
 
 
 ## Usage
-Train and Evaluate model
+Train and evaluate the model
+
+LSTM classifier with discretization into n bins:
+
 ```
 python3.7 main.py --data-dir /mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits/ --model lstm-enc-discrete-dec --pretrained-emb-path /mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/news_embs/embs/1/embeddings --n-bins 20 --epochs 30 --n-runs 5
+```
+
+LSTM regressor:
+
+```
+python3.7 main.py --data-dir /mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits/ --model lstm-enc-regression-dec --pretrained-emb-path /mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/news_embs/embs/1/embeddings --epochs 30 --n-runs 5
 ```
