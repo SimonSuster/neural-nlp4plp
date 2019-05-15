@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from sklearn.metrics import accuracy_score, mean_absolute_error
 
-from corpus_util import Nlp4plpCorpus, Nlp4plpEncoder, Nlp4plpRegressionEncoder
-from net import LSTMClassifier, LSTMRegression
+from corpus_util import Nlp4plpCorpus, Nlp4plpEncoder, Nlp4plpRegressionEncoder, Nlp4plpPointerNetEncoder
+from net import LSTMClassifier, LSTMRegression, PointerNet
 
 
 def get_correct_problems(test_corp, y_pred, bin_edges):
@@ -18,18 +18,19 @@ def get_correct_problems(test_corp, y_pred, bin_edges):
 
 def main():
     arg_parser = argparse.ArgumentParser(description="parser for End-to-End Memory Networks")
-    arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training")
+    arg_parser.add_argument("--batch-size", type=int, default=25, help="batch size for training")
+    arg_parser.add_argument("--bidir", action="store_true")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="",
                             help="path to folder from where data is loaded. Subfolder should be train/dev/test")
     arg_parser.add_argument("--dropout", type=float, default=0.0)
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
-    arg_parser.add_argument("--hidden-dim", type=int, default=50, help="")
+    arg_parser.add_argument("--hidden-dim", type=int, default=64, help="")
     # arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
-    arg_parser.add_argument("--model", type=str, help="lstm-enc-discrete-dec | lstm-enc-regression-dec")
+    arg_parser.add_argument("--model", type=str, help="lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec")
     arg_parser.add_argument("--n-bins", type=int, default=10, help="number of bins for discretization of answers")
     arg_parser.add_argument("--n-layers", type=int, default=1, help="number of layers for the RNN")
     arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
@@ -54,8 +55,12 @@ def main():
         train_corp = Nlp4plpCorpus(args.data_dir + "train")
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
         test_corp = Nlp4plpCorpus(args.data_dir + "test")
+    elif args.model == "lstm-enc-pointer-dec":
+        train_corp = Nlp4plpCorpus(args.data_dir + "train")
+        dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
+        test_corp = Nlp4plpCorpus(args.data_dir + "test")
     else:
-        raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec'")
+        raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec'")
 
     test_score_runs = []
     for n in range(args.n_runs):
@@ -90,8 +95,25 @@ def main():
                           }
             classifier = LSTMRegression(**net_params)
             eval_score = mean_absolute_error
+        elif args.model == "lstm-enc-pointer-dec":
+            # initialize vocab
+            corpus_encoder = Nlp4plpPointerNetEncoder.from_corpus(train_corp, dev_corp)
+            net_params = {'n_layers': args.n_layers,
+                          'hidden_dim': args.hidden_dim,
+                          'vocab_size': corpus_encoder.vocab.size,
+                          'padding_idx': corpus_encoder.vocab.pad,
+                          'embedding_dim': args.embed_size,
+                          'dropout': args.dropout,
+                          'batch_size': args.batch_size,
+                          'word_idx': corpus_encoder.vocab.word2idx,
+                          'pretrained_emb_path': args.pretrained_emb_path,
+                          'output_len': 1,  # decoder output length
+                          'bidir': args.bidir
+                          }
+            classifier = PointerNet(**net_params)
+            eval_score = accuracy_score
         else:
-            raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec'")
+            raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec' | lstm-enc-pointer-dec")
 
         optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
 
@@ -102,8 +124,10 @@ def main():
             classifier = LSTMClassifier.load(f_model='lstm_classifier.tar')
         elif args.model == 'lstm-enc-regression-dec':
             classifier = LSTMRegression.load(f_model='lstm_regression.tar')
+        elif args.model == 'lstm-enc-pointer-dec':
+            classifier = PointerNet.load(f_model='lstm_pointer.tar')
         else:
-            raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec'")
+            raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec'")
 
         # get predictions
         y_pred, y_true = classifier.predict(test_corp, corpus_encoder)

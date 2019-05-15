@@ -370,6 +370,50 @@ class Nlp4plpRegressionEncoder(Nlp4plpEncoder):
         return t, labels, lengths
 
 
+class Nlp4plpPointerNetEncoder(Nlp4plpEncoder):
+    def get_label(self, inst):
+        label = 1
+        return label
+
+    def get_batches(self, corpus, batch_size):
+
+        instances = list()
+        labels = list()
+
+        for inst in corpus.insts:
+            cur_inst = self.encode_inst(inst.txt)
+            instances.append(cur_inst)
+            labels.append(self.get_label(inst))
+            if len(instances) == batch_size:
+                yield (instances, labels)
+                instances = list()
+                labels = list()
+
+        if instances:
+            yield (instances, labels)
+
+    def batch_to_tensors(self, cur_insts, cur_labels, device):
+        '''
+        Transforms an encoded batch to the corresponding torch tensor
+        :return: tensor of batch padded to maxlen, and a tensor of actual instance lengths
+        '''
+        lengths = [len(inst) for inst in cur_insts]
+        n_inst, maxlen = len(cur_insts), max(lengths)
+
+        t = torch.zeros(n_inst, maxlen, dtype=torch.int64) + self.vocab.pad  # this creates a tensor of padding indices
+
+        # copy the sequence
+        for idx, (inst, length) in enumerate(zip(cur_insts, lengths)):
+            t[idx, :length].copy_(torch.tensor(inst))
+
+        # contiguous() makes a copy of tensor so the order of elements would be same as if created from scratch.
+        t = t.t().contiguous().to(device)
+        lengths = torch.tensor(lengths, dtype=torch.int).to(device)
+        labels = torch.FloatTensor(cur_labels).to(device)
+
+        return t, labels, lengths
+
+
 class DataUtils:
 
     @staticmethod
