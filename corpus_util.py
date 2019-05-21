@@ -1,4 +1,5 @@
 import json
+import re
 from os.path import realpath, join
 
 import numpy as np
@@ -7,7 +8,7 @@ from nltk.tokenize import word_tokenize
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, KBinsDiscretizer
 
-from util import FileUtils, get_file_list, Nlp4plpData
+from util import FileUtils, get_file_list, Nlp4plpData, load_json
 
 # beginning of seq, end of seq, beg of line, end of line, unknown, padding symbol
 BOS, EOS, BOL, EOL, UNK, PAD = '<s>', '</s>', '<bol>', '</bol>', '<unk>', '<pad>'
@@ -97,7 +98,10 @@ def encode_labels(fit_labels, transform_labels):
 
 class Nlp4plpInst:
     def __init__(self, ls, low=True, tokenizer=word_tokenize):
-        self.id, self.txt, self.ans, self.ans_raw, self.statements = self.read(ls, low, tokenizer)
+        self.id, self.ans, self.ans_raw, self.statements = self.read(ls, low, tokenizer)
+        self.words_anno = None
+        self.txt = None
+        self.f_anno = None
 
     @staticmethod
     def read(ls, low, tokenize):
@@ -106,7 +110,7 @@ class Nlp4plpInst:
             problem_id = problem_l[1:problem_l.find("\t")].strip()
         else:
             problem_id = problem_l[1:problem_l.find(":")].strip()
-        problem_txt_lst = tokenize(problem_l[problem_l.find(":") + 1:problem_l.find("##")].strip())
+        #problem_txt_lst = tokenize(problem_l[problem_l.find(":") + 1:problem_l.find("##")].strip())
         problem_ans_raw = problem_l[problem_l.find("##") + len("## Solution:"):].strip()
         problem_ans_raw = problem_ans_raw.replace("^", "**")
         try:
@@ -119,7 +123,22 @@ class Nlp4plpInst:
             problem_ans = None
         statements = [to_lower(l.strip(), low) for l in ls[1:] if l.strip()]
 
-        return problem_id, problem_txt_lst, problem_ans, problem_ans_raw, statements
+        #return problem_id, problem_txt_lst, problem_ans, problem_ans_raw, statements
+        return problem_id, problem_ans, problem_ans_raw, statements
+
+    def add_txt_anno(self, f):
+        fh = load_json(f)
+        self.words_anno = fh["words"]
+        self.f_anno = f
+        txt = []
+        for i in range(len(self.words_anno)):
+            try:
+                s = self.words_anno[str(i + 1)]
+                for j in range(len(s)):
+                    txt.append(s[str(j + 1)]["text"].lower())
+            except KeyError:
+                continue
+        self.txt = txt
 
 
 class Nlp4plpCorpus:
@@ -134,6 +153,20 @@ class Nlp4plpCorpus:
         insts = []
         for f in dir_fs:
             inst = Nlp4plpInst(Nlp4plpData.read_pl(f))
+
+            # get anno filename
+            inst_au, inst_id = inst.id[0], inst.id[1:]
+            if " " in inst_id:
+                inst_id = inst_id.split()[0]
+            author = {"m": "monica", "l": "liselot", "h": "hannah"}[inst_au]
+            dir = "/".join(self.data_dir.split("/")[:5]) + f"/data/examples/{author}/"
+            fn = f"{inst_id:0>10}.json"
+            f_anno = dir + fn
+            try:
+                inst.add_txt_anno(f_anno)
+            except FileNotFoundError:
+                print(f"anno file {f_anno} not found")
+
             if inst.ans is not None:
                 insts.append(inst)
                 fs.append(f)
@@ -147,6 +180,75 @@ class Nlp4plpCorpus:
         np.random.shuffle(idx)
         self.fs = list(np.array(self.fs)[idx])
         self.insts = list(np.array(self.insts)[idx])
+
+    #def get_attr_type(self, attr):
+    #    # get attribute type: sent-tok id (e.g. '1-6') vs. token ('population')
+
+    def get_group_label(self, inst):
+        def get_from_ids(inst, s_id, t_id):
+            # If token index t_id is from sentence 1, we don't need sentence segments.
+            # Note that s_id and t_id index from 1, whereas we should use 0-indexing.
+            if s_id == 1:
+                label = t_id - 1
+            else:
+                tok_cn = 0
+                for i in range(s_id - 1):
+                    try:
+                        tok_cn += len(inst.words_anno[str(i+1)])
+                    except KeyError:
+                        continue
+                label = tok_cn + t_id
+            return label
+
+        def get_from_token(inst, t):
+            try:
+                label = inst.txt.index(t)
+            except ValueError:
+                label = None
+
+            return label
+
+        gs = [s for s in inst.statements if "group(" in s]  # sent-tok id or just token
+        # only use the first one
+        g = gs[0]
+        attr = re.findall(r"group\((.*)\)", g)[0]
+        hit = re.findall("^(\d+)-(\d+)$", attr)
+        if hit:
+            assert len(hit[0]) == 2
+            sent_id = int(hit[0][0])
+            tok_id = int(hit[0][1])
+            label = get_from_ids(inst, sent_id, tok_id)
+        else:
+            label = get_from_token(inst, attr)
+
+        return label
+
+    def get_dummy_label(self, inst):
+        return 1
+
+    def get_pointer_labels(self, label_type):
+        if label_type == "group":
+            get_label = self.get_group_label
+        elif label_type == "dummy":
+            get_label = self.get_dummy_label
+        else:
+            raise ValueError("invalid label_type specified")
+
+        for inst in self.insts:
+            inst.pointer_label = get_label(inst)
+
+    def remove_none_labels(self):
+        n_before = len(self.insts)
+        new_insts = []
+        new_fs = []
+        for f, inst in zip(self.fs, self.insts):
+            if inst.pointer_label is not None:
+                new_insts.append(inst)
+                new_fs.append(f)
+        self.insts = new_insts
+        self.fs = new_fs
+        n_after = len(self.insts)
+        print(f"{n_before - n_after} instances removed (pointer_label is None)")
 
     def discretize(self, n_bins=None, fitted_discretizer=None):
         """
@@ -371,19 +473,13 @@ class Nlp4plpRegressionEncoder(Nlp4plpEncoder):
 
 
 class Nlp4plpPointerNetEncoder(Nlp4plpEncoder):
-    def get_label(self, inst):
-        label = 1
-        return label
-
     def get_batches(self, corpus, batch_size):
-
         instances = list()
         labels = list()
-
         for inst in corpus.insts:
             cur_inst = self.encode_inst(inst.txt)
             instances.append(cur_inst)
-            labels.append(self.get_label(inst))
+            labels.append(inst.pointer_label)
             if len(instances) == batch_size:
                 yield (instances, labels)
                 instances = list()

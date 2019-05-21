@@ -18,7 +18,7 @@ def get_correct_problems(test_corp, y_pred, bin_edges):
 
 def main():
     arg_parser = argparse.ArgumentParser(description="parser for End-to-End Memory Networks")
-    arg_parser.add_argument("--batch-size", type=int, default=25, help="batch size for training")
+    arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training")
     arg_parser.add_argument("--bidir", action="store_true")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="",
@@ -26,7 +26,7 @@ def main():
     arg_parser.add_argument("--dropout", type=float, default=0.0)
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
-    arg_parser.add_argument("--hidden-dim", type=int, default=64, help="")
+    arg_parser.add_argument("--hidden-dim", type=int, default=50, help="")
     # arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
@@ -45,12 +45,14 @@ def main():
     # initialize corpora
     if args.model == "lstm-enc-discrete-dec":
         train_corp = Nlp4plpCorpus(args.data_dir + "train")
-        train_corp.discretize(n_bins=args.n_bins)
-        label_size = len({inst.ans_discrete for inst in train_corp.insts})
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
-        dev_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
         test_corp = Nlp4plpCorpus(args.data_dir + "test")
+
+        train_corp.discretize(n_bins=args.n_bins)
+        dev_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
         test_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
+
+        label_size = len({inst.ans_discrete for inst in train_corp.insts})
     elif args.model == "lstm-enc-regression-dec":
         train_corp = Nlp4plpCorpus(args.data_dir + "train")
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
@@ -59,6 +61,14 @@ def main():
         train_corp = Nlp4plpCorpus(args.data_dir + "train")
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
         test_corp = Nlp4plpCorpus(args.data_dir + "test")
+
+        train_corp.get_pointer_labels(label_type="group")
+        dev_corp.get_pointer_labels(label_type="group")
+        test_corp.get_pointer_labels(label_type="group")
+
+        train_corp.remove_none_labels()
+        dev_corp.remove_none_labels()
+        test_corp.remove_none_labels()
     else:
         raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec'")
 

@@ -163,3 +163,9 @@ def update_vectors(pretr_embs, pretr_emb_idx, embs, word_idx):
             continue
         embs[i] = pretr_embs[pretr_emb_idx[w]]
     return embs
+
+
+def load_json(filename):
+    with open(filename) as in_f:
+        return json.load(in_f)
+
