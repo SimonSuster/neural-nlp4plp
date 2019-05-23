@@ -28,6 +28,8 @@ def main():
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
     arg_parser.add_argument("--hidden-dim", type=int, default=50, help="")
     # arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")
+    arg_parser.add_argument("--label-type", type=str,
+                            help="group | take | take_wr | both_take. To use with PointerNet.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
     arg_parser.add_argument("--model", type=str, help="lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec")
@@ -62,9 +64,9 @@ def main():
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
         test_corp = Nlp4plpCorpus(args.data_dir + "test")
 
-        train_corp.get_pointer_labels(label_type="group")
-        dev_corp.get_pointer_labels(label_type="group")
-        test_corp.get_pointer_labels(label_type="group")
+        train_corp.get_pointer_labels(label_type=args.label_type)
+        dev_corp.get_pointer_labels(label_type=args.label_type)
+        test_corp.get_pointer_labels(label_type=args.label_type)
 
         train_corp.remove_none_labels()
         dev_corp.remove_none_labels()

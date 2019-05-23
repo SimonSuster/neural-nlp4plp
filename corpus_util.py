@@ -181,45 +181,98 @@ class Nlp4plpCorpus:
         self.fs = list(np.array(self.fs)[idx])
         self.insts = list(np.array(self.insts)[idx])
 
-    #def get_attr_type(self, attr):
-    #    # get attribute type: sent-tok id (e.g. '1-6') vs. token ('population')
+    @staticmethod
+    def get_from_ids(inst, s_id, t_id):
+        # If token index t_id is from sentence 1, we don't need sentence segments.
+        # Note that s_id and t_id index from 1, whereas we should use 0-indexing.
+        if s_id == 1:
+            label = t_id - 1
+        else:
+            tok_cn = 0
+            for i in range(s_id - 1):
+                try:
+                    tok_cn += len(inst.words_anno[str(i+1)])
+                except KeyError:
+                    continue
+            label = tok_cn + t_id
+        return label
+
+    @staticmethod
+    def get_from_token(inst, t):
+        try:
+            label = inst.txt.index(t)
+        except ValueError:
+            label = None
+
+        return label
 
     def get_group_label(self, inst):
-        def get_from_ids(inst, s_id, t_id):
-            # If token index t_id is from sentence 1, we don't need sentence segments.
-            # Note that s_id and t_id index from 1, whereas we should use 0-indexing.
-            if s_id == 1:
-                label = t_id - 1
-            else:
-                tok_cn = 0
-                for i in range(s_id - 1):
-                    try:
-                        tok_cn += len(inst.words_anno[str(i+1)])
-                    except KeyError:
-                        continue
-                label = tok_cn + t_id
-            return label
-
-        def get_from_token(inst, t):
-            try:
-                label = inst.txt.index(t)
-            except ValueError:
-                label = None
-
-            return label
-
         gs = [s for s in inst.statements if "group(" in s]  # sent-tok id or just token
         # only use the first one
         g = gs[0]
         attr = re.findall(r"group\((.*)\)", g)[0]
-        hit = re.findall("^(\d+)-(\d+)$", attr)
+        hit = re.findall(r"^(\d+)-(\d+)$", attr)
         if hit:
             assert len(hit[0]) == 2
             sent_id = int(hit[0][0])
             tok_id = int(hit[0][1])
-            label = get_from_ids(inst, sent_id, tok_id)
+            label = self.get_from_ids(inst, sent_id, tok_id)
         else:
-            label = get_from_token(inst, attr)
+            label = self.get_from_token(inst, attr)
+
+        return label
+
+    def get_take_label(self, inst):
+        gs = [s for s in inst.statements if "take(" in s]  # sent-tok id or just token
+        if not gs:
+            return None
+        # only use the first one
+        g = gs[0]
+        attr = re.findall(r"take\((.*),.*,.*\)", g)[0]
+        hit = re.findall(r"^(\d+)-(\d+)$", attr)
+        if hit:
+            assert len(hit[0]) == 2
+            sent_id = int(hit[0][0])
+            tok_id = int(hit[0][1])
+            label = self.get_from_ids(inst, sent_id, tok_id)
+        else:
+            label = self.get_from_token(inst, attr)
+
+        return label
+
+    def get_take_wr_label(self, inst):
+        gs = [s for s in inst.statements if "take_wr(" in s]  # sent-tok id or just token
+        if not gs:
+            return None
+        # only use the first one
+        g = gs[0]
+        attr = re.findall(r"take_wr\((.*),.*,.*\)", g)[0]
+        hit = re.findall(r"^(\d+)-(\d+)$", attr)
+        if hit:
+            assert len(hit[0]) == 2
+            sent_id = int(hit[0][0])
+            tok_id = int(hit[0][1])
+            label = self.get_from_ids(inst, sent_id, tok_id)
+        else:
+            label = self.get_from_token(inst, attr)
+
+        return label
+
+    def get_both_take_label(self, inst):
+        gs = [s for s in inst.statements if ("take(" in s or "take_wr(" in s)]  # sent-tok id or just token
+        if not gs:
+            return None
+        # only use the first one
+        g = gs[0]
+        attr = re.findall(r"(take|take_wr)\((.*),.*,.*\)", g)[0][1]
+        hit = re.findall(r"^(\d+)-(\d+)$", attr)
+        if hit:
+            assert len(hit[0]) == 2
+            sent_id = int(hit[0][0])
+            tok_id = int(hit[0][1])
+            label = self.get_from_ids(inst, sent_id, tok_id)
+        else:
+            label = self.get_from_token(inst, attr)
 
         return label
 
@@ -229,6 +282,12 @@ class Nlp4plpCorpus:
     def get_pointer_labels(self, label_type):
         if label_type == "group":
             get_label = self.get_group_label
+        elif label_type == "take":
+            get_label = self.get_take_label
+        elif label_type == "take_wr":
+            get_label = self.get_take_wr_label
+        elif label_type == "both_take":
+            get_label = self.get_both_take_label
         elif label_type == "dummy":
             get_label = self.get_dummy_label
         else:
