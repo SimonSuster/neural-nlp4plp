@@ -207,6 +207,9 @@ class Nlp4plpCorpus:
         return label
 
     def get_group_label(self, inst):
+        """
+        group(y)
+        """
         gs = [s for s in inst.statements if "group(" in s]  # sent-tok id or just token
         # only use the first one
         g = gs[0]
@@ -223,6 +226,9 @@ class Nlp4plpCorpus:
         return label
 
     def get_take_label(self, inst):
+        """
+        take(y1,.,.)
+        """
         gs = [s for s in inst.statements if "take(" in s]  # sent-tok id or just token
         if not gs:
             return None
@@ -240,7 +246,60 @@ class Nlp4plpCorpus:
 
         return label
 
+    def get_take_declen2_label(self, inst):
+        """
+        take(y1,y2,.)
+        """
+        gs = [s for s in inst.statements if "take(" in s]  # sent-tok id or just token
+        if not gs:
+            return None
+        # only use the first one
+        g = gs[0]
+        attr = re.findall(r"take\((.*), *(.*), *.*\)", g)[0]
+        labels = []
+        for i in attr:
+            hit = re.findall(r"^(\d+)-(\d+)$", i)
+            if hit:
+                assert len(hit[0]) == 2
+                sent_id = int(hit[0][0])
+                tok_id = int(hit[0][1])
+                label = self.get_from_ids(inst, sent_id, tok_id)
+            else:
+                label = self.get_from_token(inst, attr)
+            labels.append(label)
+            if label is None:
+                return None
+        return labels
+
+    def get_take_wr_declen2_label(self, inst):
+        """
+        take_wr(y1,y2,.)
+        """
+        gs = [s for s in inst.statements if "take_wr(" in s]  # sent-tok id or just token
+        if not gs:
+            return None
+        # only use the first one
+        g = gs[0]
+        attr = re.findall(r"take_wr\((.*), *(.*), *.*\)", g)[0]
+        labels = []
+        for i in attr:
+            hit = re.findall(r"^(\d+)-(\d+)$", i)
+            if hit:
+                assert len(hit[0]) == 2
+                sent_id = int(hit[0][0])
+                tok_id = int(hit[0][1])
+                label = self.get_from_ids(inst, sent_id, tok_id)
+            else:
+                label = self.get_from_token(inst, attr)
+            labels.append(label)
+            if label is None:
+                return None
+        return labels
+
     def get_take_wr_label(self, inst):
+        """
+        take_wr(y1,.,.)
+        """
         gs = [s for s in inst.statements if "take_wr(" in s]  # sent-tok id or just token
         if not gs:
             return None
@@ -259,6 +318,9 @@ class Nlp4plpCorpus:
         return label
 
     def get_both_take_label(self, inst):
+        """
+        take(y1,.,.) & take_wr(y1,.,.)
+        """
         gs = [s for s in inst.statements if ("take(" in s or "take_wr(" in s)]  # sent-tok id or just token
         if not gs:
             return None
@@ -288,6 +350,10 @@ class Nlp4plpCorpus:
             get_label = self.get_take_wr_label
         elif label_type == "both_take":
             get_label = self.get_both_take_label
+        elif label_type == "take_declen2":
+            get_label = self.get_take_declen2_label
+        elif label_type == "take_wr_declen2":
+            get_label = self.get_take_wr_declen2_label
         elif label_type == "dummy":
             get_label = self.get_dummy_label
         else:
@@ -564,7 +630,7 @@ class Nlp4plpPointerNetEncoder(Nlp4plpEncoder):
         # contiguous() makes a copy of tensor so the order of elements would be same as if created from scratch.
         t = t.t().contiguous().to(device)
         lengths = torch.tensor(lengths, dtype=torch.int).to(device)
-        labels = torch.FloatTensor(cur_labels).to(device)
+        labels = torch.LongTensor(cur_labels).to(device)
 
         return t, labels, lengths
 

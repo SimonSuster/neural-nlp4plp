@@ -3,7 +3,7 @@ import argparse
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_absolute_error, accuracy_score
 
 from corpus_util import Nlp4plpCorpus, Nlp4plpRegressionEncoder
 from util import load_emb
@@ -62,13 +62,45 @@ class NNEmb(nn.Module):
         return y_pred, y_true
 
 
+class RandomPointer():
+    def predict(self, corpus, corpus_encoder, train_embs, y_train):
+        y_true = []
+        y_pred = []
+
+        for inst in corpus.insts:
+            y_true.append(inst.pointer_label)
+            y_pred.append(np.random.randint(len(inst.txt)))
+
+        return y_pred, y_true
+
+
+class SmartRandomPointer():
+    def predict(self, corpus, corpus_encoder, train_embs, y_train):
+        """
+        Randomly pick a noun from the first sentence in the passage
+        """
+        y_true = []
+        y_pred = []
+
+        for inst in corpus.insts:
+            y_true.append(inst.pointer_label)
+            pool = [w["index"]-1 for w in inst.words_anno['1'].values() if w["nlp_pos"].startswith("NN")]
+            if pool:
+                pred = np.random.choice(pool)
+            else:
+                pred = np.random.randint(len(inst.txt))
+            y_pred.append(pred)
+        return y_pred, y_true
+
+
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser(description="")
     arg_parser.add_argument("--data-dir", type=str,
                             default="/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits/",
                             help="path to folder from where data is loaded")
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
-    arg_parser.add_argument("--model", type=str, help="nearest-neighbour-emb")
+    arg_parser.add_argument("--model", type=str, help="nearest-neighbour-emb | random-pointer | smart-random-pointer")
+    arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
     args = arg_parser.parse_args()
@@ -76,20 +108,44 @@ if __name__ == "__main__":
     train_corp = Nlp4plpCorpus(args.data_dir + "train")
     test_corp = Nlp4plpCorpus(args.data_dir + "test")
 
-    if args.model == "nearest-neighbour-emb":
-        eval_score = mean_absolute_error
-        corpus_encoder = Nlp4plpRegressionEncoder.from_corpus(train_corp)
-        classifier_params = {'vocab_size': corpus_encoder.vocab.size,
-                             'padding_idx': corpus_encoder.vocab.pad,
-                             'embedding_dim': args.embed_size,
-                             'word_idx': corpus_encoder.vocab.word2idx,
-                             'pretrained_emb_path': args.pretrained_emb_path
-                             }
+    test_score_runs = []
+    for n in range(args.n_runs):
+        if args.model == "nearest-neighbour-emb":
+            eval_score = mean_absolute_error
+            corpus_encoder = Nlp4plpRegressionEncoder.from_corpus(train_corp)
+            classifier_params = {'vocab_size': corpus_encoder.vocab.size,
+                                 'padding_idx': corpus_encoder.vocab.pad,
+                                 'embedding_dim': args.embed_size,
+                                 'word_idx': corpus_encoder.vocab.word2idx,
+                                 'pretrained_emb_path': args.pretrained_emb_path
+                                 }
 
-        classifier = NNEmb(**classifier_params)
+            classifier = NNEmb(**classifier_params)
+            train_embs, y_train = classifier.load_train_embs(train_corp)
+        elif args.model == "random-pointer":
+            eval_score = accuracy_score
+            test_corp = Nlp4plpCorpus(args.data_dir + "test")
+            test_corp.get_pointer_labels(label_type="group")
+            test_corp.remove_none_labels()
+            corpus_encoder = None
+            train_embs = None
+            y_train = None
+            classifier = RandomPointer()
+        elif args.model == "smart-random-pointer":
+            eval_score = accuracy_score
+            test_corp = Nlp4plpCorpus(args.data_dir + "test")
+            test_corp.get_pointer_labels(label_type="group")
+            test_corp.remove_none_labels()
+            corpus_encoder = None
+            train_embs = None
+            y_train = None
+            classifier = SmartRandomPointer()
+        else:
+            raise NotImplementedError
 
-    train_embs, y_train = classifier.load_train_embs(train_corp)
-    # get predictions
-    y_pred, y_true = classifier.predict(test_corp, corpus_encoder, train_embs, y_train)
-    test_acc = eval_score(y_true=y_true, y_pred=y_pred)
-    print('TEST SCORE: %.3f' % test_acc)
+        # get predictions
+        y_pred, y_true = classifier.predict(test_corp, corpus_encoder, train_embs, y_train)
+        test_acc = eval_score(y_true=y_true, y_pred=y_pred)
+        test_score_runs.append(test_acc)
+        print('TEST SCORE: %.3f' % test_acc)
+    print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))

@@ -631,7 +631,7 @@ class PointerNet(nn.Module):
                 fwd_out, pointers = self.forward(cur_insts, cur_lengths)
                 fwd_out = fwd_out.contiguous().view(-1, fwd_out.size()[-1])
                 # loss calculation
-                loss = self.loss(fwd_out, cur_labels.long())
+                loss = self.loss(fwd_out, cur_labels.view(-1).long())
 
                 # backprop
                 optimizer.zero_grad()  # reset tensor gradients
@@ -657,9 +657,12 @@ class PointerNet(nn.Module):
 
             # forward pass
             _, pointers = self.forward(cur_insts, cur_lengths)
-            if pointers.size()[-1] > 1:
-                raise NotImplementedError
-            y_pred.extend(pointers[:, 0].cpu().numpy())
+
+            y_pred.extend(pointers.squeeze(1).cpu().numpy())
+
+        if self.output_len > 1:
+            y_true = [str(y) for y in y_true]
+            y_pred = [str(y) for y in y_pred]
 
         return y_pred, y_true
 

@@ -29,7 +29,7 @@ def main():
     arg_parser.add_argument("--hidden-dim", type=int, default=50, help="")
     # arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")
     arg_parser.add_argument("--label-type", type=str,
-                            help="group | take | take_wr | both_take. To use with PointerNet.")
+                            help="group | take | take_wr | both_take | take_declen2 | take_wr_declen2. To use with PointerNet.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
     arg_parser.add_argument("--model", type=str, help="lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec")
@@ -119,7 +119,7 @@ def main():
                           'batch_size': args.batch_size,
                           'word_idx': corpus_encoder.vocab.word2idx,
                           'pretrained_emb_path': args.pretrained_emb_path,
-                          'output_len': 1,  # decoder output length
+                          'output_len': 2 if "declen2" in args.label_type else 1,  # decoder output length
                           'bidir': args.bidir
                           }
             classifier = PointerNet(**net_params)
