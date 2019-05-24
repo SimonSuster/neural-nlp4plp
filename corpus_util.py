@@ -194,7 +194,7 @@ class Nlp4plpCorpus:
                     tok_cn += len(inst.words_anno[str(i+1)])
                 except KeyError:
                     continue
-            label = tok_cn + t_id
+            label = tok_cn + t_id - 1
         return label
 
     @staticmethod

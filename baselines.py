@@ -1,4 +1,5 @@
 import argparse
+from collections import Counter
 
 import numpy as np
 import torch
@@ -74,7 +75,7 @@ class RandomPointer():
         return y_pred, y_true
 
 
-class SmartRandomPointer():
+class PosRandomPointer():
     def predict(self, corpus, corpus_encoder, train_embs, y_train):
         """
         Randomly pick a noun from the first sentence in the passage
@@ -92,6 +93,45 @@ class SmartRandomPointer():
             y_pred.append(pred)
         return y_pred, y_true
 
+class SamplingPointer():
+    def __init__(self, train_corpus):
+        # get group object pointers and resolve them to words
+        y_true = []
+        for inst in train_corpus.insts:
+            w = inst.txt[inst.pointer_label]
+            y_true.append(w)
+        y_counts = Counter(y_true)
+        total = sum(y_counts.values())
+        y_probs = {k: v/total for k,v in y_counts.items()}
+        self.y_probs_keys = list(y_probs.keys())
+        self.y_probs_vals = list(y_probs.values())
+
+    def predict(self, corpus, corpus_encoder, train_embs, y_train):
+        """
+        Randomly pick a noun from the first sentence in the passage
+        """
+        y_true = []
+        y_pred = []
+
+        for inst in corpus.insts:
+            y_true.append(inst.pointer_label)
+            # call this once only?
+            sample = np.random.choice(self.y_probs_keys, len(self.y_probs_keys), p=self.y_probs_vals, replace=False)
+            i = 0
+            pred = None
+            # check most probable words first
+            while i < len(sample):
+                if sample[i] in inst.txt:
+                    pred = inst.txt.index(sample[i])
+                    break
+                i += 1
+            # random pointer if sampling failed
+            if pred is None:
+                pred = np.random.randint(len(inst.txt))
+            y_pred.append(pred)
+
+        return y_pred, y_true
+
 
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser(description="")
@@ -99,7 +139,7 @@ if __name__ == "__main__":
                             default="/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits/",
                             help="path to folder from where data is loaded")
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
-    arg_parser.add_argument("--model", type=str, help="nearest-neighbour-emb | random-pointer | smart-random-pointer")
+    arg_parser.add_argument("--model", type=str, help="nearest-neighbour-emb | pos-random-pointer | sampling-pointer")
     arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
@@ -131,7 +171,7 @@ if __name__ == "__main__":
             train_embs = None
             y_train = None
             classifier = RandomPointer()
-        elif args.model == "smart-random-pointer":
+        elif args.model == "pos-random-pointer":
             eval_score = accuracy_score
             test_corp = Nlp4plpCorpus(args.data_dir + "test")
             test_corp.get_pointer_labels(label_type="group")
@@ -139,7 +179,20 @@ if __name__ == "__main__":
             corpus_encoder = None
             train_embs = None
             y_train = None
-            classifier = SmartRandomPointer()
+            classifier = PosRandomPointer()
+        elif args.model == "sampling-pointer":
+            eval_score = accuracy_score
+            train_corp = Nlp4plpCorpus(args.data_dir + "train")
+            train_corp.get_pointer_labels(label_type="group")
+            train_corp.remove_none_labels()
+            test_corp = Nlp4plpCorpus(args.data_dir + "test")
+            test_corp.get_pointer_labels(label_type="group")
+            test_corp.remove_none_labels()
+            corpus_encoder = None
+            train_embs = None
+            y_train = None
+            classifier = SamplingPointer(train_corp)
+
         else:
             raise NotImplementedError
 
