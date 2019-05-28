@@ -63,7 +63,7 @@ class NNEmb(nn.Module):
         return y_pred, y_true
 
 
-class RandomPointer():
+class RandomPointer:
     def predict(self, corpus, corpus_encoder, train_embs, y_train):
         y_true = []
         y_pred = []
@@ -75,7 +75,7 @@ class RandomPointer():
         return y_pred, y_true
 
 
-class PosRandomPointer():
+class PosRandomPointer:
     def predict(self, corpus, corpus_encoder, train_embs, y_train):
         """
         Randomly pick a noun from the first sentence in the passage
@@ -85,7 +85,7 @@ class PosRandomPointer():
 
         for inst in corpus.insts:
             y_true.append(inst.pointer_label)
-            pool = [w["index"]-1 for w in inst.words_anno['1'].values() if w["nlp_pos"].startswith("NN")]
+            pool = [w["index"] - 1 for w in inst.words_anno['1'].values() if w["nlp_pos"].startswith("NN")]
             if pool:
                 pred = np.random.choice(pool)
             else:
@@ -93,7 +93,8 @@ class PosRandomPointer():
             y_pred.append(pred)
         return y_pred, y_true
 
-class SamplingPointer():
+
+class SamplingPointer:
     def __init__(self, train_corpus):
         # get group object pointers and resolve them to words
         y_true = []
@@ -102,7 +103,7 @@ class SamplingPointer():
             y_true.append(w)
         y_counts = Counter(y_true)
         total = sum(y_counts.values())
-        y_probs = {k: v/total for k,v in y_counts.items()}
+        y_probs = {k: v / total for k, v in y_counts.items()}
         self.y_probs_keys = list(y_probs.keys())
         self.y_probs_vals = list(y_probs.values())
 

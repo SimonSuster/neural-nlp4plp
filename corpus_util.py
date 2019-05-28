@@ -197,6 +197,34 @@ class Nlp4plpCorpus:
             label = tok_cn + t_id - 1
         return label
 
+    def get_n_idx_from_ids(self, inst, s_id, t_id, number_txt):
+        # Get index of number mentioned in the group part of that token
+        # If token index t_id is from sentence 1, we don't need sentence segments.
+        # Note that s_id and t_id index from 1, whereas we should use 0-indexing.
+        w = inst.words_anno[str(s_id)][str(t_id)]
+        try:
+            size = w["group"]["size"]
+            if str(size["number"]) != number_txt:
+                # mistake in annotation
+                # find id heuristically
+                #print("FIND ID HEURISTICALLY")
+                return None
+            try:
+                s_t_id = size["words"][0]  # what about other list items
+            except IndexError:
+                # find id heuristically
+                #print("FIND ID HEURISTICALLY")
+                return None
+            hit = re.findall(r"^(\d+)-(\d+)$", s_t_id)
+            assert len(hit[0]) == 2
+            n_sent_id = int(hit[0][0])
+            n_tok_id = int(hit[0][1])
+            label_n = self.get_from_ids(inst, n_sent_id, n_tok_id)
+        except KeyError:
+            return None
+
+        return label_n
+
     @staticmethod
     def get_from_token(inst, t):
         try:
@@ -246,6 +274,41 @@ class Nlp4plpCorpus:
 
         return label
 
+    def get_take3_label(self, inst):
+        """
+        take(.,.,n)
+        """
+        gs = [s for s in inst.statements if "take(" in s]  # sent-tok id or just token
+        if not gs:
+            return None
+        # only use the first one
+        g = gs[0]
+        attr = re.findall(r"take\((.*), *(.*), *(.*)\)", g)[0]
+
+        # y2
+        hit_y2 = re.findall(r"^(\d+)-(\d+)$", attr[1])
+        if hit_y2:
+            assert len(hit_y2[0]) == 2
+            sent_id = int(hit_y2[0][0])
+            tok_id = int(hit_y2[0][1])
+            label_y2 = self.get_from_ids(inst, sent_id, tok_id)
+        else:
+            label_y2 = self.get_from_token(inst, attr)
+        if label_y2 is None:
+            return None
+
+        # n
+        hit_n = re.findall(r"^(\d+)$", attr[2])
+        if hit_n:
+            # look up the group info from y2
+            label_n = self.get_n_idx_from_ids(inst, sent_id, tok_id, hit_n[0])
+        else:
+            label_n = None
+        if label_n is None:
+            return None
+
+        return label_n
+
     def get_take_declen2_label(self, inst):
         """
         take(y1,y2,.)
@@ -269,6 +332,57 @@ class Nlp4plpCorpus:
             labels.append(label)
             if label is None:
                 return None
+        return labels
+
+    def get_take_declen3_label(self, inst):
+        """
+        take(y1,y2,y3), where y3 is a number whose index in the passage we need to find
+        """
+        gs = [s for s in inst.statements if "take(" in s]  # sent-tok id or just token
+        if not gs:
+            return None
+        # only use the first one
+        g = gs[0]
+        attr = re.findall(r"take\((.*), *(.*), *(.*)\)", g)[0]
+        labels = []
+
+        # y1
+        hit_y1 = re.findall(r"^(\d+)-(\d+)$", attr[0])
+        if hit_y1:
+            assert len(hit_y1[0]) == 2
+            sent_id = int(hit_y1[0][0])
+            tok_id = int(hit_y1[0][1])
+            label_y1 = self.get_from_ids(inst, sent_id, tok_id)
+        else:
+            label_y1 = self.get_from_token(inst, attr)
+        if label_y1 is None:
+            return None
+        labels.append(label_y1)
+
+        # y2
+        hit_y2 = re.findall(r"^(\d+)-(\d+)$", attr[1])
+        if hit_y2:
+            assert len(hit_y2[0]) == 2
+            sent_id = int(hit_y2[0][0])
+            tok_id = int(hit_y2[0][1])
+            label_y2 = self.get_from_ids(inst, sent_id, tok_id)
+        else:
+            label_y2 = self.get_from_token(inst, attr)
+        if label_y2 is None:
+            return None
+        labels.append(label_y2)
+
+        # n
+        hit_n = re.findall(r"^(\d+)$", attr[2])
+        if hit_n:
+            # look up the group info from y2
+            label_n = self.get_n_idx_from_ids(inst, sent_id, tok_id, hit_n[0])
+        else:
+            label_n = None
+        if label_n is None:
+            return None
+
+        labels.append(label_n)
         return labels
 
     def get_take_wr_declen2_label(self, inst):
@@ -350,10 +464,16 @@ class Nlp4plpCorpus:
             get_label = self.get_take_wr_label
         elif label_type == "both_take":
             get_label = self.get_both_take_label
+        elif label_type == "take3":
+            get_label = self.get_take3_label
         elif label_type == "take_declen2":
             get_label = self.get_take_declen2_label
         elif label_type == "take_wr_declen2":
             get_label = self.get_take_wr_declen2_label
+        elif label_type == "take_declen3":
+            get_label = self.get_take_declen3_label
+        elif label_type == "take_wr_declen3":
+            get_label = self.get_take_wr_declen3_label
         elif label_type == "dummy":
             get_label = self.get_dummy_label
         else:
