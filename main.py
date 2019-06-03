@@ -1,7 +1,19 @@
 import argparse
+import random
+
+random.seed(0)
 
 import numpy as np
+
+np.random.seed(0)
+
 import torch
+
+torch.manual_seed(0)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.cuda.manual_seed(0)
+
 from sklearn.metrics import accuracy_score, mean_absolute_error
 
 from corpus_util import Nlp4plpCorpus, Nlp4plpEncoder, Nlp4plpRegressionEncoder, Nlp4plpPointerNetEncoder
@@ -12,7 +24,7 @@ def get_correct_problems(test_corp, y_pred, bin_edges):
     correct = set()
     for inst, pred in zip(test_corp.insts, y_pred):
         if inst.ans_discrete == pred:
-            correct.add(f"bin: {tuple(bin_edges[pred:pred+2])}\nid: {inst.id}\n{' '.join(inst.txt)}\n")
+            correct.add(f"bin: {tuple(bin_edges[pred:pred + 2])}\nid: {inst.id}\n{' '.join(inst.txt)}\n")
     return correct
 
 
@@ -26,18 +38,21 @@ def main():
     arg_parser.add_argument("--dropout", type=float, default=0.0)
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
+    arg_parser.add_argument("--feat_embed-size", type=int, default=50, help="embedding dimension for external features")
     arg_parser.add_argument("--hidden-dim", type=int, default=50, help="")
     # arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")
     arg_parser.add_argument("--label-type", type=str,
-                            help="group | take | take_wr | both_take | take3 | take_declen2 | take_wr_declen2 | take_declen3 | take_wr_declen3. To use with PointerNet.")
+                            help="group | take | take_wr | both_take | take3 | take_declen2 | take_wr_declen2 | take_declen3 | take_wr_declen3 | both_take_declen3. To use with PointerNet.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
-    arg_parser.add_argument("--model", type=str, help="lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec")
+    arg_parser.add_argument("--model", type=str,
+                            help="lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec")
     arg_parser.add_argument("--n-bins", type=int, default=10, help="number of bins for discretization of answers")
     arg_parser.add_argument("--n-layers", type=int, default=1, help="number of layers for the RNN")
     arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
+    arg_parser.add_argument("--feat-pos", action="store_true", help="use PoS features in the encoder")
     arg_parser.add_argument("--print-correct", action="store_true")
     arg_parser.add_argument("--save-model", action="store_true")
     # arg_parser.add_argument("--test", type=int, default=1)
@@ -74,6 +89,7 @@ def main():
     else:
         raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec'")
 
+    feature_encoder = None
     test_score_runs = []
     for n in range(args.n_runs):
         if args.model == "lstm-enc-discrete-dec":
@@ -119,9 +135,17 @@ def main():
                           'batch_size': args.batch_size,
                           'word_idx': corpus_encoder.vocab.word2idx,
                           'pretrained_emb_path': args.pretrained_emb_path,
-                          'output_len': int(args.label_type[-1]) if "declen" in args.label_type else 1,  # decoder output length
+                          'output_len': int(args.label_type[-1]) if "declen" in args.label_type else 1,
+                          # decoder output length
                           'bidir': args.bidir
                           }
+            if args.feat_pos:
+                feature_encoder = Nlp4plpPointerNetEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=["pos"])
+                net_params['feature_idx'] = feature_encoder.vocab.word2idx
+                net_params['feat_size'] = feature_encoder.vocab.size
+                net_params['feat_padding_idx'] = feature_encoder.vocab.pad
+                net_params['feat_emb_dim'] = args.feat_embed_size
+
             classifier = PointerNet(**net_params)
             eval_score = accuracy_score
         else:
@@ -129,7 +153,7 @@ def main():
 
         optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
 
-        classifier.train_model(train_corp, dev_corp, corpus_encoder, args.epochs, optimizer)
+        classifier.train_model(train_corp, dev_corp, corpus_encoder, feature_encoder, args.epochs, optimizer)
 
         # load model
         if args.model == 'lstm-enc-discrete-dec':
@@ -142,7 +166,7 @@ def main():
             raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec'")
 
         # get predictions
-        y_pred, y_true = classifier.predict(test_corp, corpus_encoder)
+        y_pred, y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
 
         # compute scoring metrics
         test_acc = eval_score(y_true=y_true, y_pred=y_pred)

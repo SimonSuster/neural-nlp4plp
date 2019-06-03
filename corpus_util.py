@@ -1,9 +1,21 @@
 import json
+import random
+
+random.seed(0)
 import re
 from os.path import realpath, join
 
 import numpy as np
+
+np.random.seed(0)
+
 import torch
+
+torch.manual_seed(0)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.cuda.manual_seed(0)
+
 from nltk.tokenize import word_tokenize
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, KBinsDiscretizer
@@ -101,6 +113,7 @@ class Nlp4plpInst:
         self.id, self.ans, self.ans_raw, self.statements = self.read(ls, low, tokenizer)
         self.words_anno = None
         self.txt = None
+        self.pos = None
         self.f_anno = None
 
     @staticmethod
@@ -110,7 +123,7 @@ class Nlp4plpInst:
             problem_id = problem_l[1:problem_l.find("\t")].strip()
         else:
             problem_id = problem_l[1:problem_l.find(":")].strip()
-        #problem_txt_lst = tokenize(problem_l[problem_l.find(":") + 1:problem_l.find("##")].strip())
+        # problem_txt_lst = tokenize(problem_l[problem_l.find(":") + 1:problem_l.find("##")].strip())
         problem_ans_raw = problem_l[problem_l.find("##") + len("## Solution:"):].strip()
         problem_ans_raw = problem_ans_raw.replace("^", "**")
         try:
@@ -123,22 +136,28 @@ class Nlp4plpInst:
             problem_ans = None
         statements = [to_lower(l.strip(), low) for l in ls[1:] if l.strip()]
 
-        #return problem_id, problem_txt_lst, problem_ans, problem_ans_raw, statements
+        # return problem_id, problem_txt_lst, problem_ans, problem_ans_raw, statements
         return problem_id, problem_ans, problem_ans_raw, statements
 
     def add_txt_anno(self, f):
+        """
+        Creates a list of toks and a list of PoS tags in the passage based on annotated files
+        """
+        self.f_anno = f
         fh = load_json(f)
         self.words_anno = fh["words"]
-        self.f_anno = f
         txt = []
+        pos = []
         for i in range(len(self.words_anno)):
             try:
                 s = self.words_anno[str(i + 1)]
                 for j in range(len(s)):
                     txt.append(s[str(j + 1)]["text"].lower())
+                    pos.append(s[str(j + 1)]["nlp_pos"])
             except KeyError:
                 continue
         self.txt = txt
+        self.pos = pos
 
 
 class Nlp4plpCorpus:
@@ -191,7 +210,7 @@ class Nlp4plpCorpus:
             tok_cn = 0
             for i in range(s_id - 1):
                 try:
-                    tok_cn += len(inst.words_anno[str(i+1)])
+                    tok_cn += len(inst.words_anno[str(i + 1)])
                 except KeyError:
                     continue
             label = tok_cn + t_id - 1
@@ -207,13 +226,13 @@ class Nlp4plpCorpus:
             if str(size["number"]) != number_txt:
                 # mistake in annotation
                 # find id heuristically
-                #print("FIND ID HEURISTICALLY")
+                # print("FIND ID HEURISTICALLY")
                 return None
             try:
                 s_t_id = size["words"][0]  # what about other list items
             except IndexError:
                 # find id heuristically
-                #print("FIND ID HEURISTICALLY")
+                # print("FIND ID HEURISTICALLY")
                 return None
             hit = re.findall(r"^(\d+)-(\d+)$", s_t_id)
             assert len(hit[0]) == 2
@@ -385,6 +404,108 @@ class Nlp4plpCorpus:
         labels.append(label_n)
         return labels
 
+    def get_both_take_declen3_label(self, inst):
+        """
+        take(y1,y2,y3) & take_wr(y1,y2,y3), where y3 is a number whose index in the passage we need to find
+        """
+        gs = [s for s in inst.statements if ("take(" in s or "take_wr(" in s)]  # sent-tok id or just token
+        if not gs:
+            return None
+        # only use the first one
+        g = gs[0]
+        attr = re.findall(r"(take|take_wr)\((.*), *(.*), *(.*)\)", g)[0][1:]
+        labels = []
+
+        # y1
+        hit_y1 = re.findall(r"^(\d+)-(\d+)$", attr[0])
+        if hit_y1:
+            assert len(hit_y1[0]) == 2
+            sent_id = int(hit_y1[0][0])
+            tok_id = int(hit_y1[0][1])
+            label_y1 = self.get_from_ids(inst, sent_id, tok_id)
+        else:
+            label_y1 = self.get_from_token(inst, attr)
+        if label_y1 is None:
+            return None
+        labels.append(label_y1)
+
+        # y2
+        hit_y2 = re.findall(r"^(\d+)-(\d+)$", attr[1])
+        if hit_y2:
+            assert len(hit_y2[0]) == 2
+            sent_id = int(hit_y2[0][0])
+            tok_id = int(hit_y2[0][1])
+            label_y2 = self.get_from_ids(inst, sent_id, tok_id)
+        else:
+            label_y2 = self.get_from_token(inst, attr)
+        if label_y2 is None:
+            return None
+        labels.append(label_y2)
+
+        # n
+        hit_n = re.findall(r"^(\d+)$", attr[2])
+        if hit_n:
+            # look up the group info from y2
+            label_n = self.get_n_idx_from_ids(inst, sent_id, tok_id, hit_n[0])
+        else:
+            label_n = None
+        if label_n is None:
+            return None
+
+        labels.append(label_n)
+        return labels
+
+    def get_take_wr_declen3_label(self, inst):
+        """
+        take_wr(y1,y2,y3), where y3 is a number whose index in the passage we need to find
+        """
+        gs = [s for s in inst.statements if "take_wr(" in s]  # sent-tok id or just token
+        if not gs:
+            return None
+        # only use the first one
+        g = gs[0]
+        attr = re.findall(r"take_wr\((.*), *(.*), *(.*)\)", g)[0]
+        labels = []
+
+        # y1
+        hit_y1 = re.findall(r"^(\d+)-(\d+)$", attr[0])
+        if hit_y1:
+            assert len(hit_y1[0]) == 2
+            sent_id = int(hit_y1[0][0])
+            tok_id = int(hit_y1[0][1])
+            label_y1 = self.get_from_ids(inst, sent_id, tok_id)
+        else:
+            label_y1 = self.get_from_token(inst, attr)
+        if label_y1 is None:
+            return None
+        labels.append(label_y1)
+
+        # y2
+        hit_y2 = re.findall(r"^(\d+)-(\d+)$", attr[1])
+        if hit_y2:
+            assert len(hit_y2[0]) == 2
+            sent_id = int(hit_y2[0][0])
+            tok_id = int(hit_y2[0][1])
+            label_y2 = self.get_from_ids(inst, sent_id, tok_id)
+        else:
+            label_y2 = self.get_from_token(inst, attr)
+        if label_y2 is None:
+            return None
+        labels.append(label_y2)
+
+        # n
+        hit_n = re.findall(r"^(\d+)$", attr[2])
+        if hit_n:
+            # look up the group info from y2
+            label_n = self.get_n_idx_from_ids(inst, sent_id, tok_id, hit_n[0])
+        else:
+            label_n = None
+        if label_n is None:
+            return None
+
+        labels.append(label_n)
+        return labels
+
     def get_take_wr_declen2_label(self, inst):
         """
         take_wr(y1,y2,.)
@@ -474,6 +595,8 @@ class Nlp4plpCorpus:
             get_label = self.get_take_declen3_label
         elif label_type == "take_wr_declen3":
             get_label = self.get_take_wr_declen3_label
+        elif label_type == "both_take_declen3":
+            get_label = self.get_both_take_declen3_label
         elif label_type == "dummy":
             get_label = self.get_dummy_label
         else:
@@ -676,6 +799,27 @@ class Nlp4plpEncoder(CorpusEncoder):
         # return cls(vocab, sg)
         return cls(vocab)
 
+    @classmethod
+    def feature_from_corpus(cls, *corpora, feat_type=["pos"]):
+        # create vocab set for initializing Vocab class
+        vocab_set = set()
+        # sg_set = set()
+
+        for corpus in corpora:
+            for inst in corpus.insts:
+                # sg_set.add(skipgrams(words, n = 3, k = 1))
+                for word in inst.pos:
+                    if not word in vocab_set:
+                        vocab_set.add(word)
+
+        # create vocabs
+        # @todo: add min and max freq to vocab items
+        vocab = Vocab.populate_indices(vocab_set, unk=UNK, pad=PAD)  # bos=BOS, eos=EOS, bol=BOL, eol=EOL),
+        # sg = Vocab.populate_indices(sg_set)
+
+        # return cls(vocab, sg)
+        return cls(vocab)
+
 
 class Nlp4plpRegressionEncoder(Nlp4plpEncoder):
     def get_batches(self, corpus, batch_size):
@@ -733,6 +877,18 @@ class Nlp4plpPointerNetEncoder(Nlp4plpEncoder):
         if instances:
             yield (instances, labels)
 
+    def get_feature_batches(self, corpus, batch_size, feat_type=["pos"]):
+        instances = list()
+        for inst in corpus.insts:
+            cur_inst = self.encode_inst(inst.pos)
+            instances.append(cur_inst)
+            if len(instances) == batch_size:
+                yield instances
+                instances = list()
+
+        if instances:
+            yield instances
+
     def batch_to_tensors(self, cur_insts, cur_labels, device):
         '''
         Transforms an encoded batch to the corresponding torch tensor
@@ -753,6 +909,26 @@ class Nlp4plpPointerNetEncoder(Nlp4plpEncoder):
         labels = torch.LongTensor(cur_labels).to(device)
 
         return t, labels, lengths
+
+    def feature_batch_to_tensors(self, cur_insts, device):
+        '''
+        Transforms an encoded batch to the corresponding torch tensor
+        :return: tensor of batch padded to maxlen, and a tensor of actual instance lengths
+        '''
+        lengths = [len(inst) for inst in cur_insts]
+        n_inst, maxlen = len(cur_insts), max(lengths)
+
+        t = torch.zeros(n_inst, maxlen, dtype=torch.int64) + self.vocab.pad  # this creates a tensor of padding indices
+
+        # copy the sequence
+        for idx, (inst, length) in enumerate(zip(cur_insts, lengths)):
+            t[idx, :length].copy_(torch.tensor(inst))
+
+        # contiguous() makes a copy of tensor so the order of elements would be same as if created from scratch.
+        t = t.t().contiguous().to(device)
+        lengths = torch.tensor(lengths, dtype=torch.int).to(device)
+
+        return t, lengths
 
 
 class DataUtils:

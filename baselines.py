@@ -150,6 +150,7 @@ if __name__ == "__main__":
     test_corp = Nlp4plpCorpus(args.data_dir + "test")
 
     test_score_runs = []
+
     for n in range(args.n_runs):
         if args.model == "nearest-neighbour-emb":
             eval_score = mean_absolute_error

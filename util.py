@@ -2,11 +2,22 @@ from __future__ import print_function
 
 import json
 import os
+import random
+
+random.seed(0)
 from os import makedirs
 from os.path import exists, join, realpath
 
 import numpy as np
+
+np.random.seed(0)
+
 import torch
+
+torch.manual_seed(0)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.cuda.manual_seed(0)
 from torch import nn
 
 long_tensor_type = torch.LongTensor
@@ -168,4 +179,3 @@ def update_vectors(pretr_embs, pretr_emb_idx, embs, word_idx):
 def load_json(filename):
     with open(filename) as in_f:
         return json.load(in_f)
-
