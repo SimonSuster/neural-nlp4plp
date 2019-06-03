@@ -28,6 +28,21 @@ def get_correct_problems(test_corp, y_pred, bin_edges):
     return correct
 
 
+def inspect(corp, _y_true, _y_pred):
+    print("Inspecting prediction from the last run:")
+    for c, (y_p, y_t) in enumerate(zip(_y_pred, _y_true)):
+        if not isinstance(y_p, (list, np.ndarray)):
+            y_p = [y_p]
+        if not isinstance(y_t, (list, np.ndarray)):
+            y_t = [y_t]
+        if c > 20:
+            break
+        y_ts = [corp.insts[c].txt[i] for i in y_t]
+        y_ps = [corp.insts[c].txt[i] for i in y_p]
+        print(f"true: {y_ts}")
+        print(f"pred: {y_ps if y_ps!=y_ts else 'same'}\n")
+
+
 def main():
     arg_parser = argparse.ArgumentParser(description="parser for End-to-End Memory Networks")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training")
@@ -40,6 +55,7 @@ def main():
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
     arg_parser.add_argument("--feat_embed-size", type=int, default=50, help="embedding dimension for external features")
     arg_parser.add_argument("--hidden-dim", type=int, default=50, help="")
+    arg_parser.add_argument("--inspect", action="store_true")
     # arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")
     arg_parser.add_argument("--label-type", type=str,
                             help="group | take | take_wr | both_take | take3 | take_declen2 | take_wr_declen2 | take_declen3 | take_wr_declen3 | both_take_declen3. To use with PointerNet.")
@@ -166,7 +182,14 @@ def main():
             raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec'")
 
         # get predictions
-        y_pred, y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
+        _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
+
+        if net_params["output_len"] > 1:
+            y_true = [str(y) for y in _y_true]
+            y_pred = [str(y) for y in _y_pred]
+        else:
+            y_true = _y_true
+            y_pred = _y_pred
 
         # compute scoring metrics
         test_acc = eval_score(y_true=y_true, y_pred=y_pred)
@@ -176,6 +199,9 @@ def main():
         print('TEST SCORE: %.3f' % test_acc)
         test_score_runs.append(test_acc)
     print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
+
+    if args.inspect:
+        inspect(test_corp, _y_true, _y_pred)
 
 
 if __name__ == '__main__':

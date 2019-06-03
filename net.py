@@ -695,6 +695,9 @@ class PointerNet(nn.Module):
                 optimizer.step()  # perform the gradient update step
                 running_loss += loss.item()
             y_pred, y_true = self.predict(dev_corpus, feature_encoder, corpus_encoder)
+            if self.output_len > 1:
+                y_true = [str(y) for y in y_true]
+                y_pred = [str(y) for y in y_pred]
             self.train()  # set back the train mode
             dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
             if dev_acc > best_acc:
@@ -724,10 +727,6 @@ class PointerNet(nn.Module):
             _, pointers = self.forward(cur_insts, cur_feats, cur_lengths)
 
             y_pred.extend(pointers.squeeze(1).cpu().numpy())
-
-        if self.output_len > 1:
-            y_true = [str(y) for y in y_true]
-            y_pred = [str(y) for y in y_pred]
 
         return y_pred, y_true
 
