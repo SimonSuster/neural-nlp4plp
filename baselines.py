@@ -99,13 +99,28 @@ class SamplingPointer:
         # get group object pointers and resolve them to words
         y_true = []
         for inst in train_corpus.insts:
-            w = inst.txt[inst.pointer_label]
+            if isinstance(inst.pointer_label, (list, np.ndarray)):
+                w = [inst.txt[i] for i in inst.pointer_label]
+            else:
+                w = inst.txt[inst.pointer_label]
             y_true.append(w)
-        y_counts = Counter(y_true)
-        total = sum(y_counts.values())
-        y_probs = {k: v / total for k, v in y_counts.items()}
-        self.y_probs_keys = list(y_probs.keys())
-        self.y_probs_vals = list(y_probs.values())
+
+        if isinstance(w, list):
+            self.y_probs_keys = []
+            self.y_probs_vals = []
+            length = len(w)
+            for i in range(length):
+                y_counts = Counter([l[i] for l in y_true])
+                total = sum(y_counts.values())
+                y_probs = {k: v / total for k, v in y_counts.items()}
+                self.y_probs_keys.append(list(y_probs.keys()))
+                self.y_probs_vals.append(list(y_probs.values()))
+        else:
+            y_counts = Counter(y_true)
+            total = sum(y_counts.values())
+            y_probs = {k: v / total for k, v in y_counts.items()}
+            self.y_probs_keys = list(y_probs.keys())
+            self.y_probs_vals = list(y_probs.values())
 
     def predict(self, corpus, corpus_encoder, train_embs, y_train):
         """
@@ -116,20 +131,64 @@ class SamplingPointer:
 
         for inst in corpus.insts:
             y_true.append(inst.pointer_label)
-            # call this once only?
-            sample = np.random.choice(self.y_probs_keys, len(self.y_probs_keys), p=self.y_probs_vals, replace=False)
-            i = 0
-            pred = None
-            # check most probable words first
-            while i < len(sample):
-                if sample[i] in inst.txt:
-                    pred = inst.txt.index(sample[i])
-                    break
-                i += 1
-            # random pointer if sampling failed
-            if pred is None:
-                pred = np.random.randint(len(inst.txt))
-            y_pred.append(pred)
+            if isinstance(inst.pointer_label, (list, np.ndarray)):
+                length = len(inst.pointer_label)
+                pred_l = []  # contains length-many predictions
+                for j in range(length):
+                    sample = np.random.choice(self.y_probs_keys[j], len(self.y_probs_keys[j]), p=self.y_probs_vals[j], replace=False)
+                    i = 0
+                    pred = None
+                    # check most probable words first
+                    while i < len(sample):
+                        if sample[i] in inst.txt:
+                            pred = inst.txt.index(sample[i])
+                            break
+                        i += 1
+                    # random pointer if sampling failed
+                    if pred is None:
+                        pred = np.random.randint(len(inst.txt))
+                    pred_l.append(pred)
+                y_pred.append(pred_l)
+            else:
+                # call this once only?
+                sample = np.random.choice(self.y_probs_keys, len(self.y_probs_keys), p=self.y_probs_vals, replace=False)
+                i = 0
+                pred = None
+                # check most probable words first
+                while i < len(sample):
+                    if sample[i] in inst.txt:
+                        pred = inst.txt.index(sample[i])
+                        break
+                    i += 1
+                # random pointer if sampling failed
+                if pred is None:
+                    pred = np.random.randint(len(inst.txt))
+                y_pred.append(pred)
+
+        return y_pred, y_true
+
+
+class RandomProb:
+    def predict(self, corpus, corpus_encoder, train_embs, y_train):
+        y_true = []
+        y_pred = []
+        for inst in corpus.insts:
+            y_true.append(inst.ans)
+            y_pred.append(np.random.rand())
+
+        return y_pred, y_true
+
+
+class AvgProb(object):
+    def __init__(self, corpus):
+        self.avg_prob = np.mean([inst.ans for inst in corpus.insts])
+
+    def predict(self, corpus, corpus_encoder, train_embs, y_train):
+        y_true = []
+        y_pred = []
+        for inst in corpus.insts:
+            y_true.append(inst.ans)
+            y_pred.append(self.avg_prob)
 
         return y_pred, y_true
 
@@ -140,10 +199,12 @@ if __name__ == "__main__":
                             default="/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits/",
                             help="path to folder from where data is loaded")
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
-    arg_parser.add_argument("--model", type=str, help="nearest-neighbour-emb | pos-random-pointer | sampling-pointer")
-    arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
+    arg_parser.add_argument("--model", type=str, help="nearest-neighbour-emb | pos-random-pointer | sampling-pointer | random-prob | avg-prob")
+    arg_parser.add_argument("--n-runs", type=int, default=50, help="number of runs to average over the results")
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
+    arg_parser.add_argument("--pointer-type", type=str,
+                            help="group | take | take_declen3", default="group")
     args = arg_parser.parse_args()
 
     train_corp = Nlp4plpCorpus(args.data_dir + "train")
@@ -166,8 +227,9 @@ if __name__ == "__main__":
             train_embs, y_train = classifier.load_train_embs(train_corp)
         elif args.model == "random-pointer":
             eval_score = accuracy_score
+            label_type = args.pointer_type
             test_corp = Nlp4plpCorpus(args.data_dir + "test")
-            test_corp.get_pointer_labels(label_type="group")
+            test_corp.get_pointer_labels(label_type=label_type)
             test_corp.remove_none_labels()
             corpus_encoder = None
             train_embs = None
@@ -175,8 +237,9 @@ if __name__ == "__main__":
             classifier = RandomPointer()
         elif args.model == "pos-random-pointer":
             eval_score = accuracy_score
+            label_type = args.pointer_type
             test_corp = Nlp4plpCorpus(args.data_dir + "test")
-            test_corp.get_pointer_labels(label_type="group")
+            test_corp.get_pointer_labels(label_type=label_type)
             test_corp.remove_none_labels()
             corpus_encoder = None
             train_embs = None
@@ -184,22 +247,42 @@ if __name__ == "__main__":
             classifier = PosRandomPointer()
         elif args.model == "sampling-pointer":
             eval_score = accuracy_score
+            label_type = args.pointer_type
             train_corp = Nlp4plpCorpus(args.data_dir + "train")
-            train_corp.get_pointer_labels(label_type="group")
+            train_corp.get_pointer_labels(label_type=label_type)
             train_corp.remove_none_labels()
             test_corp = Nlp4plpCorpus(args.data_dir + "test")
-            test_corp.get_pointer_labels(label_type="group")
+            test_corp.get_pointer_labels(label_type=label_type)
             test_corp.remove_none_labels()
             corpus_encoder = None
             train_embs = None
             y_train = None
             classifier = SamplingPointer(train_corp)
-
+        elif args.model == "random-prob":
+            eval_score = mean_absolute_error
+            test_corp = Nlp4plpCorpus(args.data_dir + "test")
+            corpus_encoder = None
+            train_embs = None
+            y_train = None
+            classifier = RandomProb()
+        elif args.model == "avg-prob":
+            eval_score = mean_absolute_error
+            train_corp = Nlp4plpCorpus(args.data_dir + "train")
+            test_corp = Nlp4plpCorpus(args.data_dir + "test")
+            corpus_encoder = None
+            train_embs = None
+            y_train = None
+            classifier = AvgProb(train_corp)
+            print(f"avg prob: {classifier.avg_prob}")
         else:
             raise NotImplementedError
 
         # get predictions
         y_pred, y_true = classifier.predict(test_corp, corpus_encoder, train_embs, y_train)
+        if isinstance(y_pred[0], list):
+            y_true = [str(y) for y in y_true]
+            y_pred = [str(y) for y in y_pred]
+
         test_acc = eval_score(y_true=y_true, y_pred=y_pred)
         test_score_runs.append(test_acc)
         print('TEST SCORE: %.3f' % test_acc)

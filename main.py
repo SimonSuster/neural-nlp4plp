@@ -53,7 +53,7 @@ def main():
     arg_parser.add_argument("--dropout", type=float, default=0.0)
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
-    arg_parser.add_argument("--feat_embed-size", type=int, default=50, help="embedding dimension for external features")
+    arg_parser.add_argument("--feat_embed-size", type=int, default=10, help="embedding dimension for external features")
     arg_parser.add_argument("--hidden-dim", type=int, default=50, help="")
     arg_parser.add_argument("--inspect", action="store_true")
     # arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")

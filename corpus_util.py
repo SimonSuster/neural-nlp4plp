@@ -229,7 +229,7 @@ class Nlp4plpCorpus:
                 # print("FIND ID HEURISTICALLY")
                 return None
             try:
-                s_t_id = size["words"][0]  # what about other list items
+                s_t_id = size["words"][0]  # what about other list items, where the number needs to be inferred?
             except IndexError:
                 # find id heuristically
                 # print("FIND ID HEURISTICALLY")

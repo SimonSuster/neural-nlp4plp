@@ -547,7 +547,7 @@ class PointerDecoder(nn.Module):
             one_hot_pointers = (runner == indices.unsqueeze(1).expand(-1, outs.size()[1])).float()
 
             # Update mask to ignore seen indices
-            mask = mask * (1 - one_hot_pointers)
+            mask = mask * (1 - one_hot_pointers)  # constrained to always be different?
 
             # Get embedded inputs by max indices
             embedding_mask = one_hot_pointers.unsqueeze(2).expand(-1, -1, self.final_emb_dim).byte()
