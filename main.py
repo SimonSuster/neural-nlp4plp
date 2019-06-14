@@ -16,8 +16,9 @@ torch.cuda.manual_seed(0)
 
 from sklearn.metrics import accuracy_score, mean_absolute_error
 
-from corpus_util import Nlp4plpCorpus, Nlp4plpEncoder, Nlp4plpRegressionEncoder, Nlp4plpPointerNetEncoder
-from net import LSTMClassifier, LSTMRegression, PointerNet
+from corpus_util import Nlp4plpCorpus, Nlp4plpEncoder, Nlp4plpRegressionEncoder, Nlp4plpPointerNetEncoder, \
+    Nlp4plpEncDecEncoder
+from net import LSTMClassifier, LSTMRegression, PointerNet, EncoderDecoder
 
 
 def get_correct_problems(test_corp, y_pred, bin_edges):
@@ -59,10 +60,13 @@ def main():
     # arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")
     arg_parser.add_argument("--label-type", type=str,
                             help="group | take | take_wr | both_take | take3 | take_declen2 | take_wr_declen2 | take_declen3 | take_wr_declen3 | both_take_declen3. To use with PointerNet.")
+    arg_parser.add_argument("--label-type-dec", type=str,
+                            help="predicates | arguments. To use with EncDec.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
-    arg_parser.add_argument("--model", type=str,
-                            help="lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec")
+    arg_parser.add_argument("--max-output-len", type=int, default=50, help="Maximum decoding length for EncDec models at prediction time.")
+    model_names = "lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec | lstm-enc-dec"
+    arg_parser.add_argument("--model", type=str, help=f"{model_names}")
     arg_parser.add_argument("--n-bins", type=int, default=10, help="number of bins for discretization of answers")
     arg_parser.add_argument("--n-layers", type=int, default=1, help="number of layers for the RNN")
     arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
@@ -102,8 +106,20 @@ def main():
         train_corp.remove_none_labels()
         dev_corp.remove_none_labels()
         test_corp.remove_none_labels()
+    elif args.model == "lstm-enc-dec":
+        train_corp = Nlp4plpCorpus(args.data_dir + "train")
+        dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
+        test_corp = Nlp4plpCorpus(args.data_dir + "test")
+
+        train_corp.get_labels(label_type=args.label_type_dec, max_output_len=50)
+        dev_corp.get_labels(label_type=args.label_type_dec, max_output_len=50)
+        test_corp.get_labels(label_type=args.label_type_dec)
+
+        train_corp.remove_none_labels()
+        dev_corp.remove_none_labels()
+        test_corp.remove_none_labels()
     else:
-        raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec'")
+        raise ValueError(f"Model should be '{model_names}'")
 
     feature_encoder = None
     test_score_runs = []
@@ -164,8 +180,37 @@ def main():
 
             classifier = PointerNet(**net_params)
             eval_score = accuracy_score
+        elif args.model == "lstm-enc-dec":
+            # initialize vocab
+            corpus_encoder = Nlp4plpEncDecEncoder.from_corpus(train_corp, dev_corp)
+            #max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
+            net_params = {'n_layers': args.n_layers,
+                          'hidden_dim': args.hidden_dim,
+                          'vocab_size': corpus_encoder.vocab.size,
+                          'padding_idx': corpus_encoder.vocab.pad,
+                          'label_padding_idx': corpus_encoder.label_vocab.pad,
+                          'embedding_dim': args.embed_size,
+                          'dropout': args.dropout,
+                          'batch_size': args.batch_size,
+                          'word_idx': corpus_encoder.vocab.word2idx,
+                          'label_idx': corpus_encoder.label_vocab.word2idx,
+                          'pretrained_emb_path': args.pretrained_emb_path,
+                          'max_output_len': args.max_output_len,
+                          'label_size': len(corpus_encoder.label_vocab),
+                          'bidir': args.bidir
+                          }
+            if args.feat_pos:
+                feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=["pos"])
+                net_params['feature_idx'] = feature_encoder.vocab.word2idx
+                net_params['feat_size'] = feature_encoder.vocab.size
+                net_params['feat_padding_idx'] = feature_encoder.vocab.pad
+                net_params['feat_emb_dim'] = args.feat_embed_size
+
+            classifier = EncoderDecoder(**net_params)
+            eval_score = accuracy_score
+
         else:
-            raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec' | lstm-enc-pointer-dec")
+            raise ValueError(f"Model should be '{model_names}'")
 
         optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
 
@@ -178,13 +223,16 @@ def main():
             classifier = LSTMRegression.load(f_model='lstm_regression.tar')
         elif args.model == 'lstm-enc-pointer-dec':
             classifier = PointerNet.load(f_model='lstm_pointer.tar')
+        elif args.model == 'lstm-enc-dec':
+            classifier = EncoderDecoder.load(f_model='lstm_encdec.tar')
         else:
-            raise ValueError("Model should be 'lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec'")
+            raise ValueError(f"Model should be '{model_names}'")
 
         # get predictions
         _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
 
-        if net_params["output_len"] > 1:
+        # for accuracy calculation
+        if args.model == "lstm-enc-dec" or net_params["output_len"] > 1:
             y_true = [str(y) for y in _y_true]
             y_pred = [str(y) for y in _y_pred]
         else:

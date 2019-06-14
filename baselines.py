@@ -69,7 +69,7 @@ class RandomPointer:
         y_pred = []
 
         for inst in corpus.insts:
-            y_true.append(inst.pointer_label)
+            y_true.append(inst.label)
             y_pred.append(np.random.randint(len(inst.txt)))
 
         return y_pred, y_true
@@ -84,7 +84,7 @@ class PosRandomPointer:
         y_pred = []
 
         for inst in corpus.insts:
-            y_true.append(inst.pointer_label)
+            y_true.append(inst.label)
             pool = [w["index"] - 1 for w in inst.words_anno['1'].values() if w["nlp_pos"].startswith("NN")]
             if pool:
                 pred = np.random.choice(pool)
@@ -99,10 +99,10 @@ class SamplingPointer:
         # get group object pointers and resolve them to words
         y_true = []
         for inst in train_corpus.insts:
-            if isinstance(inst.pointer_label, (list, np.ndarray)):
-                w = [inst.txt[i] for i in inst.pointer_label]
+            if isinstance(inst.label, (list, np.ndarray)):
+                w = [inst.txt[i] for i in inst.label]
             else:
-                w = inst.txt[inst.pointer_label]
+                w = inst.txt[inst.label]
             y_true.append(w)
 
         if isinstance(w, list):
@@ -130,9 +130,9 @@ class SamplingPointer:
         y_pred = []
 
         for inst in corpus.insts:
-            y_true.append(inst.pointer_label)
-            if isinstance(inst.pointer_label, (list, np.ndarray)):
-                length = len(inst.pointer_label)
+            y_true.append(inst.label)
+            if isinstance(inst.label, (list, np.ndarray)):
+                length = len(inst.label)
                 pred_l = []  # contains length-many predictions
                 for j in range(length):
                     sample = np.random.choice(self.y_probs_keys[j], len(self.y_probs_keys[j]), p=self.y_probs_vals[j], replace=False)

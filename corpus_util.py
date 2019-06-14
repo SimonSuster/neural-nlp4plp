@@ -134,7 +134,7 @@ class Nlp4plpInst:
                 problem_ans_raw,
                 problem_id))
             problem_ans = None
-        statements = [to_lower(l.strip(), low) for l in ls[1:] if l.strip()]
+        statements = [to_lower(l.strip(), low) for l in ls[1:] if l.strip() and not l.strip().startswith("%")]
 
         # return problem_id, problem_txt_lst, problem_ans, problem_ans_raw, statements
         return problem_id, problem_ans, problem_ans_raw, statements
@@ -576,6 +576,23 @@ class Nlp4plpCorpus:
     def get_dummy_label(self, inst):
         return 1
 
+    def get_predicate_label(self, inst):
+        """
+        Get all (outermost) predicate names as labels
+        """
+        def get_outer_predicate(s):
+            hits = re.findall(r"^(\w+)", s)
+            assert len(hits) == 1, (s, inst.id)
+            return hits.pop()
+
+        labels = []
+        for statement in inst.statements:
+            predicate = get_outer_predicate(statement)
+            labels.append(predicate)
+
+        return labels  # [[predicate1], [predicate2], ...]
+
+
     def get_pointer_labels(self, label_type):
         if label_type == "group":
             get_label = self.get_group_label
@@ -603,20 +620,31 @@ class Nlp4plpCorpus:
             raise ValueError("invalid label_type specified")
 
         for inst in self.insts:
-            inst.pointer_label = get_label(inst)
+            inst.label = get_label(inst)
+
+    def get_labels(self, label_type, max_output_len=None):
+        if label_type == "predicates":
+            get_label = self.get_predicate_label
+        else:
+            raise ValueError("invalid label_type specified")
+
+        for inst in self.insts:
+            inst.label = get_label(inst)
+            if max_output_len is not None and len(inst.label) > max_output_len:
+                inst.label = None
 
     def remove_none_labels(self):
         n_before = len(self.insts)
         new_insts = []
         new_fs = []
         for f, inst in zip(self.fs, self.insts):
-            if inst.pointer_label is not None:
+            if inst.label is not None:
                 new_insts.append(inst)
                 new_fs.append(f)
         self.insts = new_insts
         self.fs = new_fs
         n_after = len(self.insts)
-        print(f"{n_before - n_after} instances removed (pointer_label is None)")
+        print(f"{n_before - n_after} instances removed (label is None)")
 
     def discretize(self, n_bins=None, fitted_discretizer=None):
         """
@@ -656,19 +684,17 @@ class Corpus:
 
 class CorpusEncoder:
 
-    def __init__(self, vocab):  # , skipgrams):
+    def __init__(self, vocab, label_vocab=None):  # , skipgrams):
         self.vocab = vocab
-        # self.sg = skipgrams
+        self.label_vocab = label_vocab
 
     @classmethod
     def from_corpus(cls, *corpora):
         # create vocab set for initializing Vocab class
         vocab_set = set()
-        # sg_set = set()
 
         for corpus in corpora:
             for (words, labels) in corpus:
-                # sg_set.add(skipgrams(words, n = 3, k = 1))
                 for word in words:
                     if not word in vocab_set:
                         vocab_set.add(word)
@@ -676,9 +702,7 @@ class CorpusEncoder:
         # create vocabs
         # @todo: add min and max freq to vocab items
         vocab = Vocab.populate_indices(vocab_set, unk=UNK, pad=PAD)  # bos=BOS, eos=EOS, bol=BOL, eol=EOL),
-        # sg = Vocab.populate_indices(sg_set)
 
-        # return cls(vocab, sg)
         return cls(vocab)
 
     def encode_inst(self, inst):
@@ -820,6 +844,38 @@ class Nlp4plpEncoder(CorpusEncoder):
         # return cls(vocab, sg)
         return cls(vocab)
 
+    def get_feature_batches(self, corpus, batch_size, feat_type=["pos"]):
+        instances = list()
+        for inst in corpus.insts:
+            cur_inst = self.encode_inst(inst.pos)
+            instances.append(cur_inst)
+            if len(instances) == batch_size:
+                yield instances
+                instances = list()
+
+        if instances:
+            yield instances
+
+    def feature_batch_to_tensors(self, cur_insts, device):
+        '''
+        Transforms an encoded batch to the corresponding torch tensor
+        :return: tensor of batch padded to maxlen, and a tensor of actual instance lengths
+        '''
+        lengths = [len(inst) for inst in cur_insts]
+        n_inst, maxlen = len(cur_insts), max(lengths)
+
+        t = torch.zeros(n_inst, maxlen, dtype=torch.int64) + self.vocab.pad  # this creates a tensor of padding indices
+
+        # copy the sequence
+        for idx, (inst, length) in enumerate(zip(cur_insts, lengths)):
+            t[idx, :length].copy_(torch.tensor(inst))
+
+        # contiguous() makes a copy of tensor so the order of elements would be same as if created from scratch.
+        t = t.t().contiguous().to(device)
+        lengths = torch.tensor(lengths, dtype=torch.int).to(device)
+
+        return t, lengths
+
 
 class Nlp4plpRegressionEncoder(Nlp4plpEncoder):
     def get_batches(self, corpus, batch_size):
@@ -868,7 +924,90 @@ class Nlp4plpPointerNetEncoder(Nlp4plpEncoder):
         for inst in corpus.insts:
             cur_inst = self.encode_inst(inst.txt)
             instances.append(cur_inst)
-            labels.append(inst.pointer_label)
+            labels.append(inst.label)
+            if len(instances) == batch_size:
+                yield (instances, labels)
+                instances = list()
+                labels = list()
+
+        if instances:
+            yield (instances, labels)
+
+    def batch_to_tensors(self, cur_insts, cur_labels, device):
+        '''
+        Transforms an encoded batch to the corresponding torch tensor
+        :return: tensor of batch padded to maxlen, and a tensor of actual instance lengths
+        '''
+        lengths = [len(inst) for inst in cur_insts]
+        n_inst, maxlen = len(cur_insts), max(lengths)
+
+        t = torch.zeros(n_inst, maxlen, dtype=torch.int64) + self.vocab.pad  # this creates a tensor of padding indices
+
+        # copy the sequence
+        for idx, (inst, length) in enumerate(zip(cur_insts, lengths)):
+            t[idx, :length].copy_(torch.tensor(inst))
+
+        # contiguous() makes a copy of tensor so the order of elements would be same as if created from scratch.
+        t = t.t().contiguous().to(device)
+        lengths = torch.tensor(lengths, dtype=torch.int).to(device)
+        labels = torch.LongTensor(cur_labels).to(device)
+
+        return t, labels, lengths
+
+
+class Nlp4plpEncDecEncoder(CorpusEncoder):
+    @classmethod
+    def from_corpus(cls, *corpora):
+        # create vocab set for initializing Vocab class
+        vocab_set = set()
+        label_vocab_set = set()
+
+        for corpus in corpora:
+            for inst in corpus.insts:
+                for word in inst.txt:
+                    if word not in vocab_set:
+                        vocab_set.add(word)
+                for label in inst.label:
+                    if label not in label_vocab_set:
+                        label_vocab_set.add(label)
+
+        # create vocabs
+        # @todo: add min and max freq to vocab items
+        vocab = Vocab.populate_indices(vocab_set, unk=UNK, pad=PAD)  # bos=BOS, eos=EOS, bol=BOL, eol=EOL),
+        label_vocab = Vocab.populate_indices(label_vocab_set, eos=EOS, pad=PAD)
+
+        return cls(vocab, label_vocab)
+
+    def encode_labels(self, labels):
+        '''
+        Converts sentence to sequence of indices after adding beginning, end and replacing unk tokens.
+        @todo: check if beg and end of seq and line are required for our classification setup.
+        '''
+        out = [self.transform_label(label) for label in labels]
+        # if self.vocab.bos is not None:
+        #     out = [self.vocab.bos] + out
+        if self.vocab.eos is not None:
+            out = out + [self.vocab.eos]
+        return out
+
+    def transform_label(self, label):
+        return self.label_vocab.word2idx[label]
+        #try:
+        #    return self.label_vocab.word2idx[label]
+        #except KeyError:
+        #    if self.vocab.unk is None:
+        #        raise ValueError("Couldn't retrieve <unk> for unknown token")
+        #    else:
+        #        return self.vocab.unk
+
+    def get_batches(self, corpus, batch_size):
+        instances = list()
+        labels = list()
+        for inst in corpus.insts:
+            cur_inst = self.encode_inst(inst.txt)
+            instances.append(cur_inst)
+            cur_labels = self.encode_labels(inst.label)
+            labels.append(cur_labels)
             if len(instances) == batch_size:
                 yield (instances, labels)
                 instances = list()
@@ -896,19 +1035,25 @@ class Nlp4plpPointerNetEncoder(Nlp4plpEncoder):
         '''
         lengths = [len(inst) for inst in cur_insts]
         n_inst, maxlen = len(cur_insts), max(lengths)
-
         t = torch.zeros(n_inst, maxlen, dtype=torch.int64) + self.vocab.pad  # this creates a tensor of padding indices
-
         # copy the sequence
         for idx, (inst, length) in enumerate(zip(cur_insts, lengths)):
             t[idx, :length].copy_(torch.tensor(inst))
-
         # contiguous() makes a copy of tensor so the order of elements would be same as if created from scratch.
         t = t.t().contiguous().to(device)
         lengths = torch.tensor(lengths, dtype=torch.int).to(device)
-        labels = torch.LongTensor(cur_labels).to(device)
 
-        return t, labels, lengths
+        label_lengths = [len(label) for label in cur_labels]
+        n_inst, maxlen = len(cur_labels), max(label_lengths)
+        label_t = torch.zeros(n_inst, maxlen, dtype=torch.int64) + self.label_vocab.pad  # this creates a tensor of padding indices
+        # copy the sequence
+        for idx, (label, length) in enumerate(zip(cur_labels, label_lengths)):
+            label_t[idx, :length].copy_(torch.tensor(label))
+        # contiguous() makes a copy of tensor so the order of elements would be same as if created from scratch.
+        label_t = label_t.contiguous().to(device)
+        label_lengths = torch.tensor(label_lengths, dtype=torch.int).to(device)
+
+        return t, lengths, label_t, label_lengths
 
     def feature_batch_to_tensors(self, cur_insts, device):
         '''
@@ -929,6 +1074,21 @@ class Nlp4plpPointerNetEncoder(Nlp4plpEncoder):
         lengths = torch.tensor(lengths, dtype=torch.int).to(device)
 
         return t, lengths
+
+    def strip_until_eos(self, labels):
+        """
+        Keep the labels in decoded sequence up to EOS symbol
+        :param labels: list of label arrays
+        """
+        new_labels = []
+        for arr in labels:
+            idxs = np.where(arr == self.label_vocab.eos)[0]
+            if idxs.size != 0:
+                new_labels.append(arr[:idxs[0]])
+            else:
+                new_labels.append(arr)
+
+        return new_labels
 
 
 class DataUtils:
