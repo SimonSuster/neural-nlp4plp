@@ -44,7 +44,7 @@ def inspect(corp, _y_true, _y_pred):
         y_ts = [corp.insts[c].txt[i] for i in y_t]
         y_ps = [corp.insts[c].txt[i] for i in y_p]
         print(f"true: {y_ts}")
-        print(f"pred: {y_ps if y_ps!=y_ts else 'same'}\n")
+        print(f"pred: {y_ps if y_ps != y_ts else 'same'}\n")
 
 
 def main():
@@ -67,7 +67,8 @@ def main():
                             help="predicates | arguments. To use with EncDec.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
-    arg_parser.add_argument("--max-output-len", type=int, default=50, help="Maximum decoding length for EncDec models at prediction time.")
+    arg_parser.add_argument("--max-output-len", type=int, default=50,
+                            help="Maximum decoding length for EncDec models at prediction time.")
     model_names = "lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec | lstm-enc-dec"
     arg_parser.add_argument("--model", type=str, help=f"{model_names}")
     arg_parser.add_argument("--n-bins", type=int, default=10, help="number of bins for discretization of answers")
@@ -189,7 +190,7 @@ def main():
         elif args.model == "lstm-enc-dec":
             # initialize vocab
             corpus_encoder = Nlp4plpEncDecEncoder.from_corpus(train_corp, dev_corp)
-            #max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
+            # max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
             net_params = {'n_layers': args.n_layers,
                           'hidden_dim': args.hidden_dim,
                           'vocab_size': corpus_encoder.vocab.size,
@@ -267,7 +268,8 @@ def main():
             print('TEST SCORE: %.3f' % test_acc)
             test_score_runs.append(test_acc)
     if args.model == "lstm-enc-dec":
-        print('AVG TEST SCORE over %d runs: %.3f, %.3f, %.3f' % (args.n_runs, np.mean(test_score_runs), np.mean(test_score_f1_runs), np.mean(test_score_bleu4_runs)))
+        print('AVG TEST SCORE over %d runs: %.3f, %.3f, %.3f' % (
+        args.n_runs, np.mean(test_score_runs), np.mean(test_score_f1_runs), np.mean(test_score_bleu4_runs)))
     else:
         print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
 

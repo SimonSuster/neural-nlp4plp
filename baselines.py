@@ -6,7 +6,9 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import mean_absolute_error, accuracy_score
 
-from corpus_util import Nlp4plpCorpus, Nlp4plpRegressionEncoder
+from corpus_util import Nlp4plpCorpus, Nlp4plpRegressionEncoder, Nlp4plpEncDecEncoder
+from pycocoevalcap.eval import COCOEvalCap
+from util import f1_score
 from util import load_emb
 
 
@@ -31,7 +33,11 @@ class NNEmb(nn.Module):
     def load_train_embs(self, corpus):
         # avoid batching to avoid zero padding
         for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, len(corpus.insts))):
-            cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
+            batch = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
+            if len(batch) == 3:
+                cur_insts, cur_labels, cur_lengths = batch
+            elif len(batch) == 4:
+                cur_insts, cur_lengths, cur_labels, cur_label_lengths = batch
             word_embs = self.word_embeddings(cur_insts).to(self.device)  # inst length * n insts * dim
             insts_embs = word_embs.mean(0)
         assert idx == 0
@@ -44,7 +50,13 @@ class NNEmb(nn.Module):
         y_true = list()
 
         for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, len(corpus.insts))):
-            cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
+            batch = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
+            if len(batch) == 3:
+                cur_insts, cur_labels, cur_lengths = batch
+            elif len(batch) == 4:
+                cur_insts, cur_lengths, cur_labels, cur_label_lengths = batch
+            else:
+                raise ValueError
             y_true.extend(cur_labels.cpu().numpy())
 
             word_embs = self.word_embeddings(cur_insts).to(self.device)  # inst length * n insts * dim
@@ -56,7 +68,9 @@ class NNEmb(nn.Module):
                 sims = self.cos(inst_emb_temp, train_embs)
                 score, inst_idx = torch.max(sims, 0)
                 ans = y_train[inst_idx]
-                y_pred.append(np.asscalar(ans.cpu().numpy()))
+                ans = ans.tolist() if ans.size() else ans.item()
+                y_pred.append(ans)
+
         assert idx == 0
 
         assert len(y_pred) == len(y_true)
@@ -135,7 +149,8 @@ class SamplingPointer:
                 length = len(inst.label)
                 pred_l = []  # contains length-many predictions
                 for j in range(length):
-                    sample = np.random.choice(self.y_probs_keys[j], len(self.y_probs_keys[j]), p=self.y_probs_vals[j], replace=False)
+                    sample = np.random.choice(self.y_probs_keys[j], len(self.y_probs_keys[j]), p=self.y_probs_vals[j],
+                                              replace=False)
                     i = 0
                     pred = None
                     # check most probable words first
@@ -199,7 +214,10 @@ if __name__ == "__main__":
                             default="/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits/",
                             help="path to folder from where data is loaded")
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
-    arg_parser.add_argument("--model", type=str, help="nearest-neighbour-emb | pos-random-pointer | sampling-pointer | random-prob | avg-prob")
+    arg_parser.add_argument("--label-type-dec", type=str,
+                            help="predicates | arguments. To use with EncDec.")
+    arg_parser.add_argument("--model", type=str,
+                            help="nearest-neighbour-emb | pos-random-pointer | sampling-pointer | random-prob | avg-prob | nearest-neighbour-predicate-seq")
     arg_parser.add_argument("--n-runs", type=int, default=50, help="number of runs to average over the results")
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
@@ -211,6 +229,9 @@ if __name__ == "__main__":
     test_corp = Nlp4plpCorpus(args.data_dir + "test")
 
     test_score_runs = []
+    if args.model == "nearest-neighbour-predicate-seq":
+        test_score_f1_runs = []
+        test_score_bleu4_runs = []
 
     for n in range(args.n_runs):
         if args.model == "nearest-neighbour-emb":
@@ -274,16 +295,54 @@ if __name__ == "__main__":
             y_train = None
             classifier = AvgProb(train_corp)
             print(f"avg prob: {classifier.avg_prob}")
+        elif args.model == "nearest-neighbour-predicate-seq":
+            eval_score = accuracy_score
+            train_corp.get_labels(label_type=args.label_type_dec, max_output_len=50)
+            test_corp.get_labels(label_type=args.label_type_dec)
+            train_corp.remove_none_labels()
+            test_corp.remove_none_labels()
+            corpus_encoder = Nlp4plpEncDecEncoder.from_corpus(train_corp)
+            classifier_params = {'vocab_size': corpus_encoder.vocab.size,
+                                 'padding_idx': corpus_encoder.vocab.pad,
+                                 'embedding_dim': args.embed_size,
+                                 'word_idx': corpus_encoder.vocab.word2idx,
+                                 'pretrained_emb_path': args.pretrained_emb_path
+                                 }
+
+            classifier = NNEmb(**classifier_params)
+            train_embs, y_train = classifier.load_train_embs(train_corp)
         else:
             raise NotImplementedError
 
         # get predictions
-        y_pred, y_true = classifier.predict(test_corp, corpus_encoder, train_embs, y_train)
-        if isinstance(y_pred[0], list):
-            y_true = [str(y) for y in y_true]
-            y_pred = [str(y) for y in y_pred]
+        _y_pred, _y_true = classifier.predict(test_corp, corpus_encoder, train_embs, y_train)
+        if isinstance(_y_pred[0], list):
+            y_true = [str(y) for y in _y_true]
+            y_pred = [str(y) for y in _y_pred]
+        else:
+            y_true = _y_true
+            y_pred = _y_pred
 
         test_acc = eval_score(y_true=y_true, y_pred=y_pred)
         test_score_runs.append(test_acc)
-        print('TEST SCORE: %.3f' % test_acc)
-    print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
+
+        if args.model == "nearest-neighbour-predicate-seq":
+            test_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
+            y_true_dict = {c: [" ".join([str(i) for i in t])] for c, t in enumerate(_y_true)}
+            y_pred_dict = {c: [" ".join([str(i) for i in p])] for c, p in enumerate(_y_pred)}
+            test_coco_eval = COCOEvalCap(y_true_dict, y_pred_dict)
+            test_coco_eval.evaluate()
+            test_coco = test_coco_eval.eval
+            test_bleu4 = test_coco["Bleu_4"]
+            print('TEST SCORE: acc: %.3f, f1: %.3f, bleu4: %.3f' % (test_acc, test_f1, test_bleu4))
+            test_score_runs.append(test_acc)
+            test_score_f1_runs.append(test_f1)
+            test_score_bleu4_runs.append(test_bleu4)
+        else:
+            print('TEST SCORE: %.3f' % test_acc)
+            test_score_runs.append(test_acc)
+    if args.model == "nearest-neighbour-predicate-seq":
+        print('AVG TEST SCORE over %d runs: %.3f, %.3f, %.3f' % (
+            args.n_runs, np.mean(test_score_runs), np.mean(test_score_f1_runs), np.mean(test_score_bleu4_runs)))
+    else:
+        print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
