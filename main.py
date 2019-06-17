@@ -64,7 +64,7 @@ def main():
     arg_parser.add_argument("--label-type", type=str,
                             help="group | take | take_wr | both_take | take3 | take_declen2 | take_wr_declen2 | take_declen3 | take_wr_declen3 | both_take_declen3. To use with PointerNet.")
     arg_parser.add_argument("--label-type-dec", type=str,
-                            help="predicates | arguments. To use with EncDec.")
+                            help="predicates | predicates-all | predicates-arguments-all. To use with EncDec.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
     arg_parser.add_argument("--max-output-len", type=int, default=50,
@@ -115,8 +115,8 @@ def main():
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
         test_corp = Nlp4plpCorpus(args.data_dir + "test")
 
-        train_corp.get_labels(label_type=args.label_type_dec, max_output_len=50)
-        dev_corp.get_labels(label_type=args.label_type_dec, max_output_len=50)
+        train_corp.get_labels(label_type=args.label_type_dec, max_output_len=args.max_output_len)
+        dev_corp.get_labels(label_type=args.label_type_dec, max_output_len=args.max_output_len)
         test_corp.get_labels(label_type=args.label_type_dec)
 
         train_corp.remove_none_labels()
@@ -190,6 +190,8 @@ def main():
         elif args.model == "lstm-enc-dec":
             # initialize vocab
             corpus_encoder = Nlp4plpEncDecEncoder.from_corpus(train_corp, dev_corp)
+            print(corpus_encoder.label_vocab.to_dict()["word2idx"])
+            print(f"n labels: {len(corpus_encoder.label_vocab)}")
             # max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
             net_params = {'n_layers': args.n_layers,
                           'hidden_dim': args.hidden_dim,

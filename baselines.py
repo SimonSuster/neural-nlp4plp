@@ -215,7 +215,7 @@ if __name__ == "__main__":
                             help="path to folder from where data is loaded")
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
     arg_parser.add_argument("--label-type-dec", type=str,
-                            help="predicates | arguments. To use with EncDec.")
+                            help="predicates | predicates-all | predicates-arguments-all. To use with EncDec.")
     arg_parser.add_argument("--model", type=str,
                             help="nearest-neighbour-emb | pos-random-pointer | sampling-pointer | random-prob | avg-prob | nearest-neighbour-predicate-seq")
     arg_parser.add_argument("--n-runs", type=int, default=50, help="number of runs to average over the results")
@@ -297,7 +297,8 @@ if __name__ == "__main__":
             print(f"avg prob: {classifier.avg_prob}")
         elif args.model == "nearest-neighbour-predicate-seq":
             eval_score = accuracy_score
-            train_corp.get_labels(label_type=args.label_type_dec, max_output_len=50)
+            max_output_len = 100 if args.label_type_dec == "predicates-arguments-all" else 50
+            train_corp.get_labels(label_type=args.label_type_dec, max_output_len=max_output_len)
             test_corp.get_labels(label_type=args.label_type_dec)
             train_corp.remove_none_labels()
             test_corp.remove_none_labels()

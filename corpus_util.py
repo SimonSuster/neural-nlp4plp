@@ -1,6 +1,9 @@
 import json
 import random
 
+from nlp4plp.evaluate.allpredicates import get_all_predicates, get_all_predicates_arguments
+from nlp4plp.evaluate.eval import parse_file
+
 random.seed(0)
 import re
 from os.path import realpath, join
@@ -110,6 +113,7 @@ def encode_labels(fit_labels, transform_labels):
 
 class Nlp4plpInst:
     def __init__(self, ls, low=True, tokenizer=word_tokenize):
+        self.f = None
         self.id, self.ans, self.ans_raw, self.statements = self.read(ls, low, tokenizer)
         self.words_anno = None
         self.txt = None
@@ -172,6 +176,7 @@ class Nlp4plpCorpus:
         insts = []
         for f in dir_fs:
             inst = Nlp4plpInst(Nlp4plpData.read_pl(f))
+            inst.f = f
 
             # get anno filename
             inst_au, inst_id = inst.id[0], inst.id[1:]
@@ -576,22 +581,41 @@ class Nlp4plpCorpus:
     def get_dummy_label(self, inst):
         return 1
 
-    def get_predicate_label(self, inst):
+    def get_predicates_label(self, inst):
         """
         Get all (outermost) predicate names as labels
         """
-        def get_outer_predicate(s):
+        def get_outer_predicates(s):
             hits = re.findall(r"^(\w+)", s)
             assert len(hits) == 1, (s, inst.id)
             return hits.pop()
 
         labels = []
         for statement in inst.statements:
-            predicate = get_outer_predicate(statement)
+            predicate = get_outer_predicates(statement)
             labels.append(predicate)
 
-        return labels  # [[predicate1], [predicate2], ...]
+        return labels  # [predicate1, predicate2, ...]
 
+    def get_predicates_all_label(self, inst):
+        """
+        Get all (outer and inner) predicate names as labels
+        """
+        problog_program = parse_file(inst.f)
+        preds = get_all_predicates(problog_program)
+        labels = [p for ps in preds for p in ps]
+
+        return labels  # [predicate1, predicate2, ...]
+
+    def get_predicates_arguments_all_label(self, inst):
+        """
+        Get all (outer and inner) predicate names as labels
+        """
+        problog_program = parse_file(inst.f)
+        preds = get_all_predicates_arguments(problog_program)
+        labels = [p for ps in preds for p in ps]
+
+        return labels  # [predicate1, predicate2, ...]
 
     def get_pointer_labels(self, label_type):
         if label_type == "group":
@@ -624,7 +648,11 @@ class Nlp4plpCorpus:
 
     def get_labels(self, label_type, max_output_len=None):
         if label_type == "predicates":
-            get_label = self.get_predicate_label
+            get_label = self.get_predicates_label
+        elif label_type == "predicates-all":
+            get_label = self.get_predicates_all_label
+        elif label_type == "predicates-arguments-all":
+            get_label = self.get_predicates_arguments_all_label
         else:
             raise ValueError("invalid label_type specified")
 
@@ -974,7 +1002,7 @@ class Nlp4plpEncDecEncoder(CorpusEncoder):
         # create vocabs
         # @todo: add min and max freq to vocab items
         vocab = Vocab.populate_indices(vocab_set, unk=UNK, pad=PAD)  # bos=BOS, eos=EOS, bol=BOL, eol=EOL),
-        label_vocab = Vocab.populate_indices(label_vocab_set, eos=EOS, pad=PAD)
+        label_vocab = Vocab.populate_indices(label_vocab_set, eos=EOS, pad=PAD, unk=UNK)
 
         return cls(vocab, label_vocab)
 
@@ -991,14 +1019,14 @@ class Nlp4plpEncDecEncoder(CorpusEncoder):
         return out
 
     def transform_label(self, label):
-        return self.label_vocab.word2idx[label]
-        #try:
-        #    return self.label_vocab.word2idx[label]
-        #except KeyError:
-        #    if self.vocab.unk is None:
-        #        raise ValueError("Couldn't retrieve <unk> for unknown token")
-        #    else:
-        #        return self.vocab.unk
+        #return self.label_vocab.word2idx[label]
+        try:
+            return self.label_vocab.word2idx[label]
+        except KeyError:
+            if self.label_vocab.unk is None:
+                raise ValueError("Couldn't retrieve <unk> for unknown token")
+            else:
+                return self.label_vocab.unk
 
     def get_batches(self, corpus, batch_size):
         instances = list()
