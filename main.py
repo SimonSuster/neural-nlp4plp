@@ -1,6 +1,9 @@
 import argparse
 import random
 
+from pycocoevalcap.eval import COCOEvalCap
+from util import f1_score
+
 random.seed(0)
 
 import numpy as np
@@ -123,6 +126,9 @@ def main():
 
     feature_encoder = None
     test_score_runs = []
+    if args.model == "lstm-enc-dec":
+        test_score_f1_runs = []
+        test_score_bleu4_runs = []
     for n in range(args.n_runs):
         if args.model == "lstm-enc-discrete-dec":
             # initialize vocab
@@ -241,12 +247,29 @@ def main():
 
         # compute scoring metrics
         test_acc = eval_score(y_true=y_true, y_pred=y_pred)
+
         if not args.print_correct and args.model == "lstm-enc-discrete-dec":
             correct = get_correct_problems(test_corp, y_pred, test_corp.fitted_discretizer.bin_edges_[0])
             print(correct)
-        print('TEST SCORE: %.3f' % test_acc)
-        test_score_runs.append(test_acc)
-    print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
+        if args.model == "lstm-enc-dec":
+            test_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
+            y_true_dict = {c: [" ".join([str(i) for i in t])] for c, t in enumerate(_y_true)}
+            y_pred_dict = {c: [" ".join([str(i) for i in p])] for c, p in enumerate(_y_pred)}
+            test_coco_eval = COCOEvalCap(y_true_dict, y_pred_dict)
+            test_coco_eval.evaluate()
+            test_coco = test_coco_eval.eval
+            test_bleu4 = test_coco["Bleu_4"]
+            print('TEST SCORE: acc: %.3f, f1: %.3f, bleu4: %.3f' % (test_acc, test_f1, test_bleu4))
+            test_score_runs.append(test_acc)
+            test_score_f1_runs.append(test_f1)
+            test_score_bleu4_runs.append(test_bleu4)
+        else:
+            print('TEST SCORE: %.3f' % test_acc)
+            test_score_runs.append(test_acc)
+    if args.model == "lstm-enc-dec":
+        print('AVG TEST SCORE over %d runs: %.3f, %.3f, %.3f' % (args.n_runs, np.mean(test_score_runs), np.mean(test_score_f1_runs), np.mean(test_score_bleu4_runs)))
+    else:
+        print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
 
     if args.inspect:
         inspect(test_corp, _y_true, _y_pred)

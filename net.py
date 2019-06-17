@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from torch.nn import Parameter
 from sklearn.metrics import accuracy_score, mean_squared_error
 
-from util import TorchUtils, load_emb
+from util import TorchUtils, load_emb, f1_score
 
 
 class Encoder(nn.Module):
@@ -1031,16 +1031,17 @@ class EncoderDecoder(nn.Module):
                 loss.backward()  # compute gradients for network params w.r.t loss
                 optimizer.step()  # perform the gradient update step
                 running_loss += loss.item()
-            y_pred, y_true = self.predict(dev_corpus, feature_encoder, corpus_encoder)
+            _y_pred, _y_true = self.predict(dev_corpus, feature_encoder, corpus_encoder)
             # for accuracy calculation
-            y_true = [str(y) for y in y_true]
-            y_pred = [str(y) for y in y_pred]
+            y_true = [str(y) for y in _y_true]
+            y_pred = [str(y) for y in _y_pred]
             self.train()  # set back the train mode
             dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
+            dev_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
             if dev_acc > best_acc:
                 self.save()
                 best_acc = dev_acc
-            print('ep %d, loss: %.3f, dev_acc: %.3f' % (i, running_loss, dev_acc))
+            print('ep %d, loss: %.3f, dev_acc: %.3f, dev_f1: %.3f' % (i, running_loss, dev_acc, dev_f1))
 
     def predict(self, corpus, feature_encoder, corpus_encoder):
         self.eval()

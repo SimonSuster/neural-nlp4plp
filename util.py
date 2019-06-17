@@ -3,6 +3,7 @@ from __future__ import print_function
 import json
 import os
 import random
+from collections import Counter
 
 random.seed(0)
 from os import makedirs
@@ -179,3 +180,15 @@ def update_vectors(pretr_embs, pretr_emb_idx, embs, word_idx):
 def load_json(filename):
     with open(filename) as in_f:
         return json.load(in_f)
+
+
+def f1_score(y_true, y_pred):
+    common = Counter(y_pred) & Counter(y_true)
+    num_same = sum(common.values())
+    if num_same == 0:
+        return 0
+    precision = 1.0 * num_same / len(y_pred)
+    recall = 1.0 * num_same / len(y_true)
+    f1 = (2 * precision * recall) / (precision + recall)
+
+    return f1
