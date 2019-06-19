@@ -1,4 +1,5 @@
 import argparse
+import os
 from datetime import datetime
 import random
 
@@ -135,6 +136,8 @@ def main():
         if args.model == "lstm-enc-discrete-dec":
             # initialize vocab
             corpus_encoder = Nlp4plpEncoder.from_corpus(train_corp, dev_corp)
+            f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+            print(f"f_model: {f_model}")
             net_params = {'n_layers': args.n_layers,
                           'hidden_dim': args.hidden_dim,
                           'vocab_size': corpus_encoder.vocab.size,
@@ -145,13 +148,15 @@ def main():
                           'batch_size': args.batch_size,
                           'word_idx': corpus_encoder.vocab.word2idx,
                           'pretrained_emb_path': args.pretrained_emb_path,
-                          'f_model': f'{format(datetime.now().strftime("%Y%m%d_%H%M%S_%f"))}'
+                          'f_model': f_model
                           }
             classifier = LSTMClassifier(**net_params)
             eval_score = accuracy_score
         elif args.model == "lstm-enc-regression-dec":
             # initialize vocab
             corpus_encoder = Nlp4plpRegressionEncoder.from_corpus(train_corp, dev_corp)
+            f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+            print(f"f_model: {f_model}")
             net_params = {'n_layers': args.n_layers,
                           'hidden_dim': args.hidden_dim,
                           'vocab_size': corpus_encoder.vocab.size,
@@ -161,13 +166,15 @@ def main():
                           'batch_size': args.batch_size,
                           'word_idx': corpus_encoder.vocab.word2idx,
                           'pretrained_emb_path': args.pretrained_emb_path,
-                          'f_model': f'{format(datetime.now().strftime("%Y%m%d_%H%M%S_%f"))}'
+                          'f_model': f_model
                           }
             classifier = LSTMRegression(**net_params)
             eval_score = mean_absolute_error
         elif args.model == "lstm-enc-pointer-dec":
             # initialize vocab
             corpus_encoder = Nlp4plpPointerNetEncoder.from_corpus(train_corp, dev_corp)
+            f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+            print(f"f_model: {f_model}")
             net_params = {'n_layers': args.n_layers,
                           'hidden_dim': args.hidden_dim,
                           'vocab_size': corpus_encoder.vocab.size,
@@ -179,7 +186,7 @@ def main():
                           'pretrained_emb_path': args.pretrained_emb_path,
                           'output_len': int(args.label_type[-1]) if "declen" in args.label_type else 1,
                           # decoder output length
-                          'f_model': f'{format(datetime.now().strftime("%Y%m%d_%H%M%S_%f"))}',
+                          'f_model': f_model,
                           'bidir': args.bidir
                           }
             if args.feat_pos:
@@ -197,6 +204,8 @@ def main():
             # print(corpus_encoder.label_vocab.to_dict()["word2idx"])
             print(f"n labels: {len(corpus_encoder.label_vocab)}")
             # max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
+            f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+            print(f"f_model: {f_model}")
             net_params = {'n_layers': args.n_layers,
                           'hidden_dim': args.hidden_dim,
                           'vocab_size': corpus_encoder.vocab.size,
@@ -210,7 +219,7 @@ def main():
                           'pretrained_emb_path': args.pretrained_emb_path,
                           'max_output_len': args.max_output_len,
                           'label_size': len(corpus_encoder.label_vocab),
-                          'f_model': f'{format(datetime.now().strftime("%Y%m%d_%H%M%S_%f"))}',
+                          'f_model': f_model,
                           'bidir': args.bidir
                           }
             if args.feat_pos:
@@ -228,6 +237,7 @@ def main():
 
         optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
 
+        print(os.path.abspath('../out/' + classifier.f_model))
         classifier.train_model(train_corp, dev_corp, corpus_encoder, feature_encoder, args.epochs, optimizer)
 
         # load model
@@ -244,6 +254,8 @@ def main():
 
         # get predictions
         _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
+        if not args.save_model:
+            classifier.remove(f_model=classifier.f_model)
 
         # for accuracy calculation
         if args.model == "lstm-enc-dec" or net_params["output_len"] > 1:

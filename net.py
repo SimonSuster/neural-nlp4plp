@@ -1,3 +1,4 @@
+import os
 import random
 
 random.seed(0)
@@ -1119,3 +1120,7 @@ class EncoderDecoder(nn.Module):
         classifier.load_state_dict(state['state_dict'])
 
         return classifier
+
+    @classmethod
+    def remove(cls, f_model='lstm_encdec.tar'):
+        os.remove("../out/" + f_model)
