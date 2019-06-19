@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime
 import random
 
 from pycocoevalcap.eval import COCOEvalCap
@@ -143,7 +144,8 @@ def main():
                           'label_size': label_size,
                           'batch_size': args.batch_size,
                           'word_idx': corpus_encoder.vocab.word2idx,
-                          'pretrained_emb_path': args.pretrained_emb_path
+                          'pretrained_emb_path': args.pretrained_emb_path,
+                          'f_model': f'{format(datetime.now().strftime("%Y%m%d_%H%M%S_%f"))}'
                           }
             classifier = LSTMClassifier(**net_params)
             eval_score = accuracy_score
@@ -158,7 +160,8 @@ def main():
                           'dropout': args.dropout,
                           'batch_size': args.batch_size,
                           'word_idx': corpus_encoder.vocab.word2idx,
-                          'pretrained_emb_path': args.pretrained_emb_path
+                          'pretrained_emb_path': args.pretrained_emb_path,
+                          'f_model': f'{format(datetime.now().strftime("%Y%m%d_%H%M%S_%f"))}'
                           }
             classifier = LSTMRegression(**net_params)
             eval_score = mean_absolute_error
@@ -176,6 +179,7 @@ def main():
                           'pretrained_emb_path': args.pretrained_emb_path,
                           'output_len': int(args.label_type[-1]) if "declen" in args.label_type else 1,
                           # decoder output length
+                          'f_model': f'{format(datetime.now().strftime("%Y%m%d_%H%M%S_%f"))}',
                           'bidir': args.bidir
                           }
             if args.feat_pos:
@@ -190,7 +194,7 @@ def main():
         elif args.model == "lstm-enc-dec":
             # initialize vocab
             corpus_encoder = Nlp4plpEncDecEncoder.from_corpus(train_corp, dev_corp)
-            print(corpus_encoder.label_vocab.to_dict()["word2idx"])
+            # print(corpus_encoder.label_vocab.to_dict()["word2idx"])
             print(f"n labels: {len(corpus_encoder.label_vocab)}")
             # max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
             net_params = {'n_layers': args.n_layers,
@@ -206,6 +210,7 @@ def main():
                           'pretrained_emb_path': args.pretrained_emb_path,
                           'max_output_len': args.max_output_len,
                           'label_size': len(corpus_encoder.label_vocab),
+                          'f_model': f'{format(datetime.now().strftime("%Y%m%d_%H%M%S_%f"))}',
                           'bidir': args.bidir
                           }
             if args.feat_pos:
@@ -227,13 +232,13 @@ def main():
 
         # load model
         if args.model == 'lstm-enc-discrete-dec':
-            classifier = LSTMClassifier.load(f_model='lstm_classifier.tar')
+            classifier = LSTMClassifier.load(f_model=net_params['f_model'])
         elif args.model == 'lstm-enc-regression-dec':
-            classifier = LSTMRegression.load(f_model='lstm_regression.tar')
+            classifier = LSTMRegression.load(f_model=net_params['f_model'])
         elif args.model == 'lstm-enc-pointer-dec':
-            classifier = PointerNet.load(f_model='lstm_pointer.tar')
+            classifier = PointerNet.load(f_model=net_params['f_model'])
         elif args.model == 'lstm-enc-dec':
-            classifier = EncoderDecoder.load(f_model='lstm_encdec.tar')
+            classifier = EncoderDecoder.load(f_model=net_params['f_model'])
         else:
             raise ValueError(f"Model should be '{model_names}'")
 
@@ -270,8 +275,8 @@ def main():
             print('TEST SCORE: %.3f' % test_acc)
             test_score_runs.append(test_acc)
     if args.model == "lstm-enc-dec":
-        print('AVG TEST SCORE over %d runs: %.3f, %.3f, %.3f' % (
-        args.n_runs, np.mean(test_score_runs), np.mean(test_score_f1_runs), np.mean(test_score_bleu4_runs)))
+        print('AVG TEST SCORE over %d runs: %.3f, f1: %.3f, bleu4: %.3f' % (
+            args.n_runs, np.mean(test_score_runs), np.mean(test_score_f1_runs), np.mean(test_score_bleu4_runs)))
     else:
         print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
 

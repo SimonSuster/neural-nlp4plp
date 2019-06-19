@@ -98,7 +98,7 @@ class Encoder(nn.Module):
 class LSTMClassifier(nn.Module):
     # based on https://github.com/MadhumitaSushil/sepsis/blob/master/src/classifiers/lstm.py
     def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, label_size, batch_size,
-                 word_idx, pretrained_emb_path):
+                 word_idx, pretrained_emb_path, f_model):
         super().__init__()
         self.n_lstm_layers = n_layers
         self.hidden_dim = hidden_dim
@@ -109,6 +109,7 @@ class LSTMClassifier(nn.Module):
         self.n_labels = label_size
         self.word_idx = word_idx
         self.pretrained_emb_path = pretrained_emb_path
+        self.f_model = f_model
 
         if torch.cuda.is_available():
             self.device = torch.device('cuda:0')
@@ -167,8 +168,8 @@ class LSTMClassifier(nn.Module):
             y_pred, y_true = self.predict(dev_corpus, corpus_encoder)
             self.train()  # set back the train mode
             dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
-            if dev_acc > best_acc:
-                self.save()
+            if i == 0 or dev_acc > best_acc:
+                self.save(self.f_model)
                 best_acc = dev_acc
             print('ep %d, loss: %.3f, dev_acc: %.3f' % (i, running_loss, dev_acc))
 
@@ -199,7 +200,8 @@ class LSTMClassifier(nn.Module):
                       'label_size': self.n_labels,
                       'batch_size': self.batch_size,
                       'word_idx': self.word_idx,
-                      'pretrained_emb_path': self.pretrained_emb_path
+                      'pretrained_emb_path': self.pretrained_emb_path,
+                      'f_model': self.f_model
                       }
 
         # save model state
@@ -222,7 +224,7 @@ class LSTMClassifier(nn.Module):
 
 class LSTMRegression(nn.Module):
     def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size, word_idx,
-                 pretrained_emb_path):
+                 pretrained_emb_path, f_model):
         super().__init__()
 
         self.n_lstm_layers = n_layers
@@ -233,6 +235,7 @@ class LSTMRegression(nn.Module):
         self.batch_size = batch_size
         self.word_idx = word_idx
         self.pretrained_emb_path = pretrained_emb_path
+        self.f_model = f_model
 
         if torch.cuda.is_available():
             self.device = torch.device('cuda:0')
@@ -297,8 +300,8 @@ class LSTMRegression(nn.Module):
             y_pred, y_true = self.predict(dev_corpus, corpus_encoder)
             self.train()  # set back the train mode
             dev_mse = mean_squared_error(y_true=y_true, y_pred=y_pred)
-            if dev_mse < best_mse:
-                self.save()
+            if i == 0 or dev_mse < best_mse:
+                self.save(self.f_model)
                 best_mse = dev_mse
             print('ep %d, loss: %.3f, dev_mse: %.3f' % (i, running_loss, dev_mse))
 
@@ -328,7 +331,8 @@ class LSTMRegression(nn.Module):
                       'dropout': self.dropout,
                       'batch_size': self.batch_size,
                       'word_idx': self.word_idx,
-                      'pretrained_emb_path': self.pretrained_emb_path
+                      'pretrained_emb_path': self.pretrained_emb_path,
+                      'f_model': self.f_model
                       }
 
         # save model state
@@ -703,6 +707,7 @@ class PointerNet(nn.Module):
                  word_idx,
                  pretrained_emb_path,
                  output_len,
+                 f_model,
                  bidir=False,
                  feature_idx=None,
                  feat_size=None,
@@ -733,6 +738,7 @@ class PointerNet(nn.Module):
         self.pretrained_emb_path = pretrained_emb_path
         self.output_len = output_len
         # decoder output length
+        self.f_model = f_model
         if bidir:
             raise NotImplementedError
         self.bidir = bidir
@@ -825,8 +831,8 @@ class PointerNet(nn.Module):
                 y_pred = [str(y) for y in y_pred]
             self.train()  # set back the train mode
             dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
-            if dev_acc > best_acc:
-                self.save()
+            if i == 0 or dev_acc > best_acc:
+                self.save(self.f_model)
                 best_acc = dev_acc
             print('ep %d, loss: %.3f, dev_acc: %.3f' % (i, running_loss, dev_acc))
 
@@ -867,6 +873,7 @@ class PointerNet(nn.Module):
                       'word_idx': self.word_idx,
                       'pretrained_emb_path': self.pretrained_emb_path,
                       'output_len': self.output_len,
+                      'f_model': self.f_model,
                       'bidir': self.bidir,
                       'feature_idx': self.feature_idx,
                       'feat_size': self.feat_size,
@@ -907,6 +914,7 @@ class EncoderDecoder(nn.Module):
                  pretrained_emb_path,
                  max_output_len,
                  label_size,
+                 f_model,
                  bidir=False,
                  feature_idx=None,
                  feat_size=None,
@@ -939,6 +947,7 @@ class EncoderDecoder(nn.Module):
         self.pretrained_emb_path = pretrained_emb_path
         self.max_output_len = max_output_len
         self.n_labels = label_size
+        self.f_model = f_model
         # decoder output length
         if bidir:
             raise NotImplementedError
@@ -1038,8 +1047,8 @@ class EncoderDecoder(nn.Module):
             self.train()  # set back the train mode
             dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
             dev_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
-            if dev_acc > best_acc:
-                self.save()
+            if i == 0 or dev_acc > best_acc:
+                self.save(self.f_model)
                 best_acc = dev_acc
             print('ep %d, loss: %.3f, dev_acc: %.3f, dev_f1: %.3f' % (i, running_loss, dev_acc, dev_f1))
 
@@ -1086,6 +1095,7 @@ class EncoderDecoder(nn.Module):
                       'pretrained_emb_path': self.pretrained_emb_path,
                       'max_output_len': self.max_output_len,
                       'label_size': self.n_labels,
+                      'f_model': self.f_model,
                       'bidir': self.bidir,
                       'feature_idx': self.feature_idx,
                       'feat_size': self.feat_size,
