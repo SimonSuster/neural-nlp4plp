@@ -34,19 +34,34 @@ def get_correct_problems(test_corp, y_pred, bin_edges):
     return correct
 
 
-def inspect(corp, _y_true, _y_pred):
-    print("Inspecting prediction from the last run:")
-    for c, (y_p, y_t) in enumerate(zip(_y_pred, _y_true)):
-        if not isinstance(y_p, (list, np.ndarray)):
-            y_p = [y_p]
-        if not isinstance(y_t, (list, np.ndarray)):
-            y_t = [y_t]
-        if c > 20:
+def inspect_encdec(corp, label_vocab, _y_true, _y_pred):
+    print("Inspecting predictions from the best model:")
+    correct = []
+    incorrect = []
+    for c, (y_t, y_p) in enumerate(zip(_y_true, _y_pred)):
+        y_t = list(y_t)
+        y_p = list(y_p)
+        if y_t == y_p:
+            if len(correct) == 30:
+                continue
+            correct.append((corp.insts[c].f, y_t, y_p))
+        else:
+            if len(incorrect) == 30:
+                continue
+            incorrect.append((corp.insts[c].f, y_t, y_p))
+        if len(correct) == 30 and len(incorrect) == 30:
             break
-        y_ts = [corp.insts[c].txt[i] for i in y_t]
-        y_ps = [corp.insts[c].txt[i] for i in y_p]
-        print(f"true: {y_ts}")
-        print(f"pred: {y_ps if y_ps != y_ts else 'same'}\n")
+
+    print("CORRECT:")
+    for f, y_t, y_p in correct:
+        print("\n"+f)
+        print([label_vocab.idx2word[y] for y in y_t])
+        print([label_vocab.idx2word[y] for y in y_p])
+    print("INCORRECT:")
+    for f, y_t, y_p in incorrect:
+        print("\n" + f)
+        print([label_vocab.idx2word[y] for y in y_t])
+        print([label_vocab.idx2word[y] for y in y_p])
 
 
 def main():
@@ -254,8 +269,6 @@ def main():
 
         # get predictions
         _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
-        if not args.save_model:
-            classifier.remove(f_model=classifier.f_model)
 
         # for accuracy calculation
         if args.model == "lstm-enc-dec" or net_params["output_len"] > 1:
@@ -293,7 +306,13 @@ def main():
         print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
 
     if args.inspect:
-        inspect(test_corp, _y_true, _y_pred)
+        #inspect(test_corp, _y_true, _y_pred)
+        # get dev predictions
+        _y_pred, _y_true = classifier.predict(dev_corp, feature_encoder, corpus_encoder)
+        inspect_encdec(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred)
+
+    if not args.save_model:
+        classifier.remove(f_model=classifier.f_model)
 
 
 if __name__ == '__main__':
