@@ -4,7 +4,7 @@ from datetime import datetime
 import random
 
 from pycocoevalcap.eval import COCOEvalCap
-from util import f1_score
+from util import f1_score, FileUtils
 
 random.seed(0)
 
@@ -32,6 +32,25 @@ def get_correct_problems(test_corp, y_pred, bin_edges):
         if inst.ans_discrete == pred:
             correct.add(f"bin: {tuple(bin_edges[pred:pred + 2])}\nid: {inst.id}\n{' '.join(inst.txt)}\n")
     return correct
+
+
+def save_preds_encdec(corp, label_vocab, _y_true, _y_pred, f_name, dir_out="../out/"):
+    print("Saving predictions from the best model:")
+    f_name = f"{f_name}.json"
+    all = {}
+    for c, (y_t, y_p) in enumerate(zip(_y_true, _y_pred)):
+        y_t = list(y_t)
+        y_p = list(y_p)
+        if y_t == y_p:
+            correct = True
+        else:
+            correct = False
+        t = [label_vocab.idx2word[y] for y in y_t]
+        p = [label_vocab.idx2word[y] for y in y_p]
+        all[corp.insts[c].f] = {"true": t, "pred": p, "correct": correct}
+
+    FileUtils.write_json(all, f_name, dir_out)
+    print(f"Writing predictions to {dir_out}{f_name}")
 
 
 def inspect_encdec(corp, label_vocab, _y_true, _y_pred):
@@ -310,10 +329,13 @@ def main():
         # get dev predictions
         _y_pred, _y_true = classifier.predict(dev_corp, feature_encoder, corpus_encoder)
         inspect_encdec(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred)
+        if args.save_model:
+            save_preds_encdec(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred, f_model)
 
     if not args.save_model:
         classifier.remove(f_model=classifier.f_model)
 
 
 if __name__ == '__main__':
+
     main()
