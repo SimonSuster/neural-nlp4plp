@@ -23,16 +23,17 @@ from util import TorchUtils, load_emb, f1_score
 
 class Encoder(nn.Module):
     def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
-                 word_idx, pretrained_emb_path, feature_idx, feat_size, feat_padding_idx, feat_emb_dim):
+                 word_idx, pretrained_emb_path, bidir, feature_idx, feat_size, feat_padding_idx, feat_emb_dim):
         super().__init__()
-        self.n_lstm_layers = n_layers
-        self.hidden_dim = hidden_dim
+        self.n_lstm_layers = n_layers*2 if bidir else n_layers
+        self.hidden_dim = hidden_dim//2 if bidir else hidden_dim
         self.vocab_size = vocab_size
         self.emb_dim = embedding_dim
         self.dropout = dropout
         self.batch_size = batch_size
         self.word_idx = word_idx
         self.pretrained_emb_path = pretrained_emb_path
+        self.bidir = bidir
         self.feature_idx = feature_idx
         self.feat_size = feat_size
         self.feat_padding_idx = feat_padding_idx
@@ -56,8 +57,8 @@ class Encoder(nn.Module):
         if feature_idx is not None:
             self.feat_embeddings = nn.Embedding(self.feat_size, self.feat_emb_dim, padding_idx=feat_padding_idx)
 
-        self.lstm = nn.LSTM(self.final_emb_dim, self.hidden_dim, num_layers=self.n_lstm_layers,
-                            dropout=self.dropout)  # lstm layers
+        self.lstm = nn.LSTM(self.final_emb_dim, self.hidden_dim, num_layers=n_layers,
+                            dropout=self.dropout, bidirectional=self.bidir)  # lstm layers
         self.to(self.device)
 
     def init_hidden(self):
@@ -78,7 +79,7 @@ class Encoder(nn.Module):
 
         # truncating the batch length if last batch has fewer elements
         cur_batch_len = len(sent_lengths)
-        hidden = (hidden[0][:, :cur_batch_len, :], hidden[1][:, :cur_batch_len, :])
+        hidden = (hidden[0][:, :cur_batch_len, :].contiguous(), hidden[1][:, :cur_batch_len, :].contiguous())
 
         # converts data to packed sequences with data and batch size at every time step after sorting them per lengths
         embs = nn.utils.rnn.pack_padded_sequence(embs[:, sort], sent_lengths[sort], batch_first=False)
@@ -950,8 +951,8 @@ class EncoderDecoder(nn.Module):
         self.n_labels = label_size
         self.f_model = f_model
         # decoder output length
-        if bidir:
-            raise NotImplementedError
+        #if bidir:
+        #    raise NotImplementedError
         self.bidir = bidir
         self.feature_idx = feature_idx
         self.feat_size = feat_size
@@ -960,7 +961,7 @@ class EncoderDecoder(nn.Module):
         self.final_emb_dim = self.emb_dim + (self.feat_emb_dim if self.feat_emb_dim is not None else 0)
 
         self.encoder = Encoder(n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
-                               word_idx, pretrained_emb_path, feature_idx, feat_size, feat_padding_idx,
+                               word_idx, pretrained_emb_path, bidir, feature_idx, feat_size, feat_padding_idx,
                                feat_emb_dim)
         self.decoder = Decoder(hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, word_idx,
                                pretrained_emb_path,
@@ -985,8 +986,8 @@ class EncoderDecoder(nn.Module):
         encoder_outputs, encoder_hidden = self.encoder(sentence, features, sent_lengths, enc_hidden0)
         encoder_outputs = encoder_outputs.permute(1, 0, 2)
         if self.bidir:
-            decoder_hidden0 = (torch.cat(encoder_hidden[0][-2:], dim=-1),
-                               torch.cat(encoder_hidden[1][-2:], dim=-1))
+            decoder_hidden0 = (torch.cat(tuple(encoder_hidden[0][-2:]), dim=-1),
+                               torch.cat(tuple(encoder_hidden[1][-2:]), dim=-1))
         else:
             decoder_hidden0 = (encoder_hidden[0][-1],
                                encoder_hidden[1][-1])
