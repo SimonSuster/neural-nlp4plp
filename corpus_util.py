@@ -1,5 +1,6 @@
 import json
 import random
+from collections import defaultdict
 
 from nlp4plp.evaluate.allpredicates import get_all_predicates, get_all_predicates_arguments
 from nlp4plp.evaluate.eval import parse_file
@@ -147,21 +148,59 @@ class Nlp4plpInst:
         """
         Creates a list of toks and a list of PoS tags in the passage based on annotated files
         """
+
+        def dep_list_to_dict(l):
+            dep_d = defaultdict(list)
+            for d in l:
+                if len(re.split("[(-,)]", d)) != 4:
+                    continue
+                rel, gov, dep, _ = re.split("[(-,)]", d)
+                if len(gov.split("-")) > 2:
+                    gov = "-".join(gov.split("-")[:2])
+                if len(dep.split("-")) > 2:
+                    dep = "-".join(dep.split("-")[:2])
+                dep_d[dep].append((gov, rel))  # can be multiple parents
+            return dep_d
+
         self.f_anno = f
         fh = load_json(f)
         self.words_anno = fh["words"]
+        # synt. dependencies from corenlp
+        try:  # not every file processed with corenlp
+            dep_l = [i for i in fh["corenlp"] if not (i.startswith("pos(") or i.startswith("word("))]
+        except KeyError:
+            dep_l = []
+        dep_d = dep_list_to_dict(dep_l)
         txt = []
         pos = []
+        rels = []
+        num = []
         for i in range(len(self.words_anno)):
             try:
                 s = self.words_anno[str(i + 1)]
                 for j in range(len(s)):
                     txt.append(s[str(j + 1)]["text"].lower())
-                    pos.append(s[str(j + 1)]["nlp_pos"])
+                    pos_tag = s[str(j + 1)]["nlp_pos"]
+                    pos.append(f"pos:{pos_tag}")
+                    dep_id = f"{i + 1}-{j + 1}"
+                    gov, rel = "", ""
+                    if dep_id in dep_d:
+                        for c, (g, r) in enumerate(dep_d[f"{i + 1}-{j + 1}"]):  # glue together feats if > 1
+                            gov += f"|{g}" if c > 0 else g
+                            rel += f"|{r}" if c > 0 else r
+                    rels.append(f"rel:{rel}")
+                    try:
+                        num_tag = [s[str(j + 1)]["corenlp"]["number"]]
+                    except KeyError:
+                        num_tag = []
+                    num_tag = True if num_tag else False
+                    num.append(f"num:{num_tag}")
             except KeyError:
                 continue
         self.txt = txt
         self.pos = pos
+        self.rels = rels
+        self.num = num
 
 
 class Nlp4plpCorpus:
@@ -585,6 +624,7 @@ class Nlp4plpCorpus:
         """
         Get all (outermost) predicate names as labels
         """
+
         def get_outer_predicates(s):
             hits = re.findall(r"^(\w+)", s)
             assert len(hits) == 1, (s, inst.id)
@@ -852,18 +892,17 @@ class Nlp4plpEncoder(CorpusEncoder):
         return cls(vocab)
 
     @classmethod
-    def feature_from_corpus(cls, *corpora, feat_type=["pos"]):
+    def feature_from_corpus(cls, *corpora, feat_type=["pos", "rels", "num"]):
         # create vocab set for initializing Vocab class
         vocab_set = set()
         # sg_set = set()
 
         for corpus in corpora:
             for inst in corpus.insts:
-                # sg_set.add(skipgrams(words, n = 3, k = 1))
-                for word in inst.pos:
-                    if not word in vocab_set:
-                        vocab_set.add(word)
-
+                for f_t in feat_type:
+                    feat = getattr(inst, f_t)
+                    feat_set = set(feat)
+                    vocab_set.update(feat_set)
         # create vocabs
         # @todo: add min and max freq to vocab items
         vocab = Vocab.populate_indices(vocab_set, unk=UNK, pad=PAD)  # bos=BOS, eos=EOS, bol=BOL, eol=EOL),
@@ -872,10 +911,12 @@ class Nlp4plpEncoder(CorpusEncoder):
         # return cls(vocab, sg)
         return cls(vocab)
 
-    def get_feature_batches(self, corpus, batch_size, feat_type=["pos"]):
+    def get_feature_batches(self, corpus, batch_size, feat_type):
         instances = list()
         for inst in corpus.insts:
-            cur_inst = self.encode_inst(inst.pos)
+            cur_inst = [self.encode_inst(getattr(inst, f_t)) for f_t in feat_type]
+            #feats = [self.encode_inst(getattr(inst, f_t)) for f_t in feat_type]
+            #cur_inst = list(zip(*feats))
             instances.append(cur_inst)
             if len(instances) == batch_size:
                 yield instances
@@ -884,25 +925,27 @@ class Nlp4plpEncoder(CorpusEncoder):
         if instances:
             yield instances
 
-    def feature_batch_to_tensors(self, cur_insts, device):
+    def feature_batch_to_tensors(self, cur_insts, device, n_feat_types):
         '''
         Transforms an encoded batch to the corresponding torch tensor
         :return: tensor of batch padded to maxlen, and a tensor of actual instance lengths
         '''
-        lengths = [len(inst) for inst in cur_insts]
+        #lengths = [len(inst) for inst in cur_insts]
+        lengths = [len(inst[0]) for inst in cur_insts]
         n_inst, maxlen = len(cur_insts), max(lengths)
 
-        t = torch.zeros(n_inst, maxlen, dtype=torch.int64) + self.vocab.pad  # this creates a tensor of padding indices
+        t = torch.zeros(n_inst, n_feat_types, maxlen, dtype=torch.int64) + self.vocab.pad  # this creates a tensor of padding indices
 
         # copy the sequence
         for idx, (inst, length) in enumerate(zip(cur_insts, lengths)):
-            t[idx, :length].copy_(torch.tensor(inst))
+            for c, i in enumerate(inst):  # several feat types
+                t[idx, c, :length].copy_(torch.tensor(i))
 
         # contiguous() makes a copy of tensor so the order of elements would be same as if created from scratch.
-        t = t.t().contiguous().to(device)
+        t = t.contiguous().to(device)
         lengths = torch.tensor(lengths, dtype=torch.int).to(device)
 
-        return t, lengths
+        return t, lengths  # t: b*n_feat_types*maxlen
 
 
 class Nlp4plpRegressionEncoder(Nlp4plpEncoder):
@@ -1019,7 +1062,7 @@ class Nlp4plpEncDecEncoder(CorpusEncoder):
         return out
 
     def transform_label(self, label):
-        #return self.label_vocab.word2idx[label]
+        # return self.label_vocab.word2idx[label]
         try:
             return self.label_vocab.word2idx[label]
         except KeyError:
@@ -1073,7 +1116,8 @@ class Nlp4plpEncDecEncoder(CorpusEncoder):
 
         label_lengths = [len(label) for label in cur_labels]
         n_inst, maxlen = len(cur_labels), max(label_lengths)
-        label_t = torch.zeros(n_inst, maxlen, dtype=torch.int64) + self.label_vocab.pad  # this creates a tensor of padding indices
+        label_t = torch.zeros(n_inst, maxlen,
+                              dtype=torch.int64) + self.label_vocab.pad  # this creates a tensor of padding indices
         # copy the sequence
         for idx, (label, length) in enumerate(zip(cur_labels, label_lengths)):
             label_t[idx, :length].copy_(torch.tensor(label))

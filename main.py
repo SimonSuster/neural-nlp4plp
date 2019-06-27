@@ -93,6 +93,8 @@ def main():
     arg_parser.add_argument("--dropout", type=float, default=0.0)
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
+    arg_parser.add_argument("--feat-onehot", action="store_true", help="use onehot feature encoding instead of embedded")
+    arg_parser.add_argument('--feat-type', nargs='+', help="Which feature to use: pos | rels | num")
     arg_parser.add_argument("--feat_embed-size", type=int, default=10, help="embedding dimension for external features")
     arg_parser.add_argument("--hidden-dim", type=int, default=50, help="")
     arg_parser.add_argument("--inspect", action="store_true")
@@ -112,7 +114,6 @@ def main():
     arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
-    arg_parser.add_argument("--feat-pos", action="store_true", help="use PoS features in the encoder")
     arg_parser.add_argument("--print-correct", action="store_true")
     arg_parser.add_argument("--save-model", action="store_true")
     # arg_parser.add_argument("--test", type=int, default=1)
@@ -223,8 +224,8 @@ def main():
                           'f_model': f_model,
                           'bidir': args.bidir
                           }
-            if args.feat_pos:
-                feature_encoder = Nlp4plpPointerNetEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=["pos"])
+            if args.feat_type:
+                feature_encoder = Nlp4plpPointerNetEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
                 net_params['feature_idx'] = feature_encoder.vocab.word2idx
                 net_params['feat_size'] = feature_encoder.vocab.size
                 net_params['feat_padding_idx'] = feature_encoder.vocab.pad
@@ -256,12 +257,14 @@ def main():
                           'f_model': f_model,
                           'bidir': args.bidir
                           }
-            if args.feat_pos:
-                feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=["pos"])
+            if args.feat_type:
+                feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
                 net_params['feature_idx'] = feature_encoder.vocab.word2idx
                 net_params['feat_size'] = feature_encoder.vocab.size
                 net_params['feat_padding_idx'] = feature_encoder.vocab.pad
                 net_params['feat_emb_dim'] = args.feat_embed_size
+                net_params['feat_type'] = args.feat_type
+                net_params['feat_onehot'] = args.feat_onehot
 
             classifier = EncoderDecoder(**net_params)
             eval_score = accuracy_score

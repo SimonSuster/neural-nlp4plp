@@ -23,7 +23,7 @@ from util import TorchUtils, load_emb, f1_score
 
 class Encoder(nn.Module):
     def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
-                 word_idx, pretrained_emb_path, bidir, feature_idx, feat_size, feat_padding_idx, feat_emb_dim):
+                 word_idx, pretrained_emb_path, bidir, feature_idx, feat_size, feat_padding_idx, feat_emb_dim, feat_type, feat_onehot):
         super().__init__()
         self.n_lstm_layers = n_layers*2 if bidir else n_layers
         self.hidden_dim = hidden_dim//2 if bidir else hidden_dim
@@ -38,7 +38,17 @@ class Encoder(nn.Module):
         self.feat_size = feat_size
         self.feat_padding_idx = feat_padding_idx
         self.feat_emb_dim = feat_emb_dim
-        self.final_emb_dim = self.emb_dim + (self.feat_emb_dim if self.feat_emb_dim is not None else 0)
+        self.feat_type = feat_type
+        self.feat_onehot = feat_onehot
+        if self.feat_type:
+            if self.feat_onehot:
+                feat_dim = self.feat_size * len(self.feat_type)
+            else:  # embedded
+                feat_dim = self.feat_emb_dim * len(self.feat_type)
+        else:
+            feat_dim = 0
+        self.feat_dim = feat_dim
+        self.final_emb_dim = self.emb_dim + self.feat_dim
 
         if torch.cuda.is_available():
             self.device = torch.device('cuda:0')
@@ -55,7 +65,10 @@ class Encoder(nn.Module):
                                                 padding_idx=padding_idx)  # embedding layer, initialized at random
 
         if feature_idx is not None:
-            self.feat_embeddings = nn.Embedding(self.feat_size, self.feat_emb_dim, padding_idx=feat_padding_idx)
+            if self.feat_onehot:
+                self.feat_embeddings = self.one_hot
+            else:
+                self.feat_embeddings = nn.Embedding(self.feat_size, self.feat_emb_dim, padding_idx=feat_padding_idx)
 
         self.lstm = nn.LSTM(self.final_emb_dim, self.hidden_dim, num_layers=n_layers,
                             dropout=self.dropout, bidirectional=self.bidir)  # lstm layers
@@ -70,11 +83,27 @@ class Encoder(nn.Module):
 
         return (h0, c0)
 
+    def one_hot(self, features):
+        """
+        :param features: b * max_seq_len * len_feat_type
+        :return: b * max_seq_len * len_feat_type * feat_size
+        """
+        idx_first = 0
+        idx_last = self.feat_size
+        x = torch.randint(idx_first, idx_last, (features.size(0), features.size(1), features.size(2), 1), dtype=torch.long)
+        z = torch.zeros(x.size(0), x.size(1), x.size(2), self.feat_size)
+        z.scatter_(3, x, 1)
+
+        return z
+
     def forward(self, sentence, features, sent_lengths, hidden):
         sort, unsort = TorchUtils.get_sort_unsort(sent_lengths)
         embs = self.word_embeddings(sentence).to(self.device)  # word sequence to embedding sequence
         if features is not None:
-            feat_embs = self.feat_embeddings(features).to(self.device)  # feature sequence to embedding sequence
+            # concatenate for all feat types
+            feat_embs = torch.cat([f_t for f_t in self.feat_embeddings(features).permute(1, 0, 2, 3)], dim=2)\
+            # match dims with embs
+            feat_embs = feat_embs.permute(1,0,2).to(self.device)
             embs = torch.cat([embs, feat_embs], dim=2).to(self.device)
 
         # truncating the batch length if last batch has fewer elements
@@ -921,7 +950,9 @@ class EncoderDecoder(nn.Module):
                  feature_idx=None,
                  feat_size=None,
                  feat_padding_idx=None,
-                 feat_emb_dim=None):
+                 feat_emb_dim=None,
+                 feat_type=None,
+                 feat_onehot=None):
         """
         Initiate EncoderDecoder
 
@@ -958,11 +989,13 @@ class EncoderDecoder(nn.Module):
         self.feat_size = feat_size
         self.feat_padding_idx = feat_padding_idx
         self.feat_emb_dim = feat_emb_dim
-        self.final_emb_dim = self.emb_dim + (self.feat_emb_dim if self.feat_emb_dim is not None else 0)
+        self.feat_type = feat_type
+        self.feat_onehot = feat_onehot
+        self.final_emb_dim = self.emb_dim + (self.feat_emb_dim*len(self.feat_type) if self.feat_emb_dim is not None else 0)
 
         self.encoder = Encoder(n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
                                word_idx, pretrained_emb_path, bidir, feature_idx, feat_size, feat_padding_idx,
-                               feat_emb_dim)
+                               feat_emb_dim, feat_type, feat_onehot)
         self.decoder = Decoder(hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, word_idx,
                                pretrained_emb_path,
                                max_output_len, label_size)
@@ -1017,7 +1050,7 @@ class EncoderDecoder(nn.Module):
             corpus.shuffle()
             # potential external features
             if feature_encoder is not None:
-                _features = feature_encoder.get_feature_batches(corpus, self.batch_size)
+                _features = feature_encoder.get_feature_batches(corpus, self.batch_size, self.feat_type)
             else:
                 _features = None
             # get train batch
@@ -1025,7 +1058,7 @@ class EncoderDecoder(nn.Module):
                 cur_feats = _features.__next__() if _features is not None else None
                 if _features is not None:
                     assert len(cur_feats) == len(cur_insts)
-                    cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device)
+                    cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device, len(self.feat_type))
                 cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(cur_insts,
                                                                                                         cur_labels,
                                                                                                         self.device)
@@ -1061,14 +1094,14 @@ class EncoderDecoder(nn.Module):
 
         # potential external features
         if feature_encoder is not None:
-            _features = feature_encoder.get_feature_batches(corpus, self.batch_size)
+            _features = feature_encoder.get_feature_batches(corpus, self.batch_size, self.feat_type)
         else:
             _features = None
         for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size)):
             cur_feats = _features.__next__() if _features is not None else None
             if _features is not None:
                 assert len(cur_feats) == len(cur_insts)
-                cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device)
+                cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device, len(self.feat_type))
             cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(cur_insts,
                                                                                                     cur_labels,
                                                                                                     self.device)
@@ -1102,7 +1135,9 @@ class EncoderDecoder(nn.Module):
                       'feature_idx': self.feature_idx,
                       'feat_size': self.feat_size,
                       'feat_padding_idx': self.feat_padding_idx,
-                      'feat_emb_dim': self.feat_emb_dim
+                      'feat_emb_dim': self.feat_emb_dim,
+                      'feat_type': self.feat_type,
+                      'feat_onehot': self.feat_onehot
                       }
 
         # save model state
