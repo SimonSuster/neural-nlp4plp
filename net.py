@@ -18,15 +18,16 @@ import torch.nn.functional as F
 from torch.nn import Parameter
 from sklearn.metrics import accuracy_score, mean_squared_error
 
-from util import TorchUtils, load_emb, f1_score
+from util import TorchUtils, load_emb, f1_score, load_bert
 
 
 class Encoder(nn.Module):
     def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
-                 word_idx, pretrained_emb_path, bidir, feature_idx, feat_size, feat_padding_idx, feat_emb_dim, feat_type, feat_onehot):
+                 word_idx, pretrained_emb_path, bidir, bert_embs, feature_idx, feat_size, feat_padding_idx,
+                 feat_emb_dim, feat_type, feat_onehot):
         super().__init__()
-        self.n_lstm_layers = n_layers*2 if bidir else n_layers
-        self.hidden_dim = hidden_dim//2 if bidir else hidden_dim
+        self.n_lstm_layers = n_layers * 2 if bidir else n_layers
+        self.hidden_dim = hidden_dim // 2 if bidir else hidden_dim
         self.vocab_size = vocab_size
         self.emb_dim = embedding_dim
         self.dropout = dropout
@@ -34,6 +35,7 @@ class Encoder(nn.Module):
         self.word_idx = word_idx
         self.pretrained_emb_path = pretrained_emb_path
         self.bidir = bidir
+        self.bert_embs = bert_embs
         self.feature_idx = feature_idx
         self.feat_size = feat_size
         self.feat_padding_idx = feat_padding_idx
@@ -60,6 +62,8 @@ class Encoder(nn.Module):
         if pretrained_emb_path is not None:
             self.word_embeddings, dim = load_emb(pretrained_emb_path, word_idx, freeze=False)
             assert dim == self.emb_dim
+        elif bert_embs:
+            self.word_embeddings, dim = load_bert(bert_embs, freeze=False)
         else:
             self.word_embeddings = nn.Embedding(self.vocab_size, self.emb_dim,
                                                 padding_idx=padding_idx)  # embedding layer, initialized at random
@@ -90,7 +94,8 @@ class Encoder(nn.Module):
         """
         idx_first = 0
         idx_last = self.feat_size
-        x = torch.randint(idx_first, idx_last, (features.size(0), features.size(1), features.size(2), 1), dtype=torch.long)
+        x = torch.randint(idx_first, idx_last, (features.size(0), features.size(1), features.size(2), 1),
+                          dtype=torch.long)
         z = torch.zeros(x.size(0), x.size(1), x.size(2), self.feat_size)
         z.scatter_(3, x, 1)
 
@@ -101,9 +106,9 @@ class Encoder(nn.Module):
         embs = self.word_embeddings(sentence).to(self.device)  # word sequence to embedding sequence
         if features is not None:
             # concatenate for all feat types
-            feat_embs = torch.cat([f_t for f_t in self.feat_embeddings(features).permute(1, 0, 2, 3)], dim=2)\
-            # match dims with embs
-            feat_embs = feat_embs.permute(1,0,2).to(self.device)
+            feat_embs = torch.cat([f_t for f_t in self.feat_embeddings(features).permute(1, 0, 2, 3)], dim=2) \
+                # match dims with embs
+            feat_embs = feat_embs.permute(1, 0, 2).to(self.device)
             embs = torch.cat([embs, feat_embs], dim=2).to(self.device)
 
         # truncating the batch length if last batch has fewer elements
@@ -620,12 +625,6 @@ class Decoder(nn.Module):
         self.n_labels = n_labels
 
         self.teacher_forcing = True
-        if pretrained_emb_path is not None:
-            self.word_embeddings, dim = load_emb(pretrained_emb_path, word_idx, freeze=False)
-            assert dim == self.emb_dim
-        else:
-            self.word_embeddings = nn.Embedding(self.vocab_size, self.emb_dim,
-                                                padding_idx=padding_idx)  # embedding layer, initialized at random
         self.label_embeddings = nn.Embedding(self.n_labels, self.emb_dim,
                                              padding_idx=label_padding_idx)  # embedding layer, initialized at random
         # self.input_to_hidden = nn.Linear(self.final_emb_dim, 4 * hidden_dim)
@@ -648,10 +647,6 @@ class Decoder(nn.Module):
         :param Tensor context: Encoder's outputs
         :return: (Output probabilities, Pointers indices), last hidden state
         """
-        # sort, unsort = TorchUtils.get_sort_unsort(sent_lengths)
-        embs = self.word_embeddings(sentence).to(self.device)  # word sequence to embedding sequence
-        embs = embs.permute(1, 0, 2)
-        input_length = embs.size(1)
 
         # truncating the batch length if last batch has fewer elements
         cur_batch_len = len(sent_lengths)
@@ -709,7 +704,7 @@ class Decoder(nn.Module):
             # Embed output labels for next input
             # TODO teacher forcing
             if self.teacher_forcing and not is_inference:
-                decoder_input = self.label_embeddings(cur_labels[:,i])
+                decoder_input = self.label_embeddings(cur_labels[:, i])
             else:
                 decoder_input = self.label_embeddings(indices)
 
@@ -947,6 +942,7 @@ class EncoderDecoder(nn.Module):
                  label_size,
                  f_model,
                  bidir=False,
+                 bert_embs=None,
                  feature_idx=None,
                  feat_size=None,
                  feat_padding_idx=None,
@@ -982,19 +978,22 @@ class EncoderDecoder(nn.Module):
         self.n_labels = label_size
         self.f_model = f_model
         # decoder output length
-        #if bidir:
+        # if bidir:
         #    raise NotImplementedError
         self.bidir = bidir
+        self.bert_embs = bert_embs
         self.feature_idx = feature_idx
         self.feat_size = feat_size
         self.feat_padding_idx = feat_padding_idx
         self.feat_emb_dim = feat_emb_dim
         self.feat_type = feat_type
         self.feat_onehot = feat_onehot
-        self.final_emb_dim = self.emb_dim + (self.feat_emb_dim*len(self.feat_type) if self.feat_emb_dim is not None else 0)
+        self.final_emb_dim = self.emb_dim + (
+            self.feat_emb_dim * len(self.feat_type) if self.feat_emb_dim is not None else 0)
 
         self.encoder = Encoder(n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
-                               word_idx, pretrained_emb_path, bidir, feature_idx, feat_size, feat_padding_idx,
+                               word_idx, pretrained_emb_path, bidir, bert_embs, feature_idx, feat_size,
+                               feat_padding_idx,
                                feat_emb_dim, feat_type, feat_onehot)
         self.decoder = Decoder(hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, word_idx,
                                pretrained_emb_path,
@@ -1054,17 +1053,19 @@ class EncoderDecoder(nn.Module):
             else:
                 _features = None
             # get train batch
-            for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size)):
+            for idx, (cur_insts, cur_labels) in enumerate(
+                    corpus_encoder.get_batches(corpus, self.batch_size, token_ids=bool(self.bert_embs))):
                 cur_feats = _features.__next__() if _features is not None else None
                 if _features is not None:
                     assert len(cur_feats) == len(cur_insts)
-                    cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device, len(self.feat_type))
-                cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(cur_insts,
-                                                                                                        cur_labels,
-                                                                                                        self.device)
+                    cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
+                                                                                           len(self.feat_type))
+                cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(
+                    cur_insts, cur_labels, self.device)
                 output_length = max(cur_label_lengths).item()
                 # forward pass
-                fwd_out, labels = self.forward(cur_insts, cur_feats, cur_lengths, output_length=output_length,
+                fwd_out, labels = self.forward(cur_insts, cur_feats, cur_lengths,
+                                               output_length=output_length,
                                                cur_labels=cur_labels)
                 fwd_out = fwd_out.contiguous().view(-1, fwd_out.size()[-1])
                 # loss calculation
@@ -1097,11 +1098,12 @@ class EncoderDecoder(nn.Module):
             _features = feature_encoder.get_feature_batches(corpus, self.batch_size, self.feat_type)
         else:
             _features = None
-        for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size)):
+        for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size, token_ids=bool(self.bert_embs))):
             cur_feats = _features.__next__() if _features is not None else None
             if _features is not None:
                 assert len(cur_feats) == len(cur_insts)
-                cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device, len(self.feat_type))
+                cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
+                                                                                       len(self.feat_type))
             cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(cur_insts,
                                                                                                     cur_labels,
                                                                                                     self.device)
@@ -1132,6 +1134,7 @@ class EncoderDecoder(nn.Module):
                       'label_size': self.n_labels,
                       'f_model': self.f_model,
                       'bidir': self.bidir,
+                      'bert_embs': self.bert_embs or None,
                       'feature_idx': self.feature_idx,
                       'feat_size': self.feat_size,
                       'feat_padding_idx': self.feat_padding_idx,

@@ -140,6 +140,14 @@ def get_file_list(topdir, identifiers=None, all_levels=False):
 
     return filelist
 
+def load_bert(bert_embs, emb_dim=1024, freeze=False):
+    vocab_size = len(bert_embs) + 1
+    e_m = np.random.normal(size=(vocab_size, emb_dim), loc=0, scale=0.1)
+    for i, e in bert_embs.items():
+        e_m[i] = e
+    embs_tensor = nn.Embedding.from_pretrained(float_tensor_type(e_m), freeze=freeze)
+
+    return embs_tensor, emb_dim
 
 def load_emb(fname, word_idx, freeze=False):
     pretr_embs, pretr_emb_idx, n = load_w2v(fname)
@@ -182,6 +190,11 @@ def load_json(filename):
         return json.load(in_f)
 
 
+def save_json(obj, filename):
+    with open(filename, "w") as out:
+        json.dump(obj, out, separators=(',', ':'))
+
+
 def f1_score(y_true, y_pred):
     common = Counter(y_pred) & Counter(y_true)
     num_same = sum(common.values())
@@ -192,3 +205,6 @@ def f1_score(y_true, y_pred):
     f1 = (2 * precision * recall) / (precision + recall)
 
     return f1
+
+def save_bert_repr():
+    pass

@@ -657,6 +657,16 @@ class Nlp4plpCorpus:
 
         return labels  # [predicate1, predicate2, ...]
 
+    def get_predicates_arguments_all_parenth_label(self, inst):
+        """
+        Get all (outer and inner) predicate names as labels; adds parentheses
+        """
+        problog_program = parse_file(inst.f)
+        preds = get_all_predicates_arguments(problog_program)
+        labels = [p for ps in preds for p in ps]
+
+        return labels  # [predicate1, predicate2, ...]
+
     def get_pointer_labels(self, label_type):
         if label_type == "group":
             get_label = self.get_group_label
@@ -693,6 +703,8 @@ class Nlp4plpCorpus:
             get_label = self.get_predicates_all_label
         elif label_type == "predicates-arguments-all":
             get_label = self.get_predicates_arguments_all_label
+        elif label_type == "predicates-arguments-all-parenth":
+            get_label = self.get_predicates_arguments_all_parenth_label
         else:
             raise ValueError("invalid label_type specified")
 
@@ -713,6 +725,13 @@ class Nlp4plpCorpus:
         self.fs = new_fs
         n_after = len(self.insts)
         print(f"{n_before - n_after} instances removed (label is None)")
+
+    def add_tok_ids(self, c=1):
+        for inst in self.insts:
+            inst.tok_ids = list(range(c, c + len(inst.txt)))
+            c += len(inst.txt)
+
+        return c
 
     def discretize(self, n_bins=None, fitted_discretizer=None):
         """
@@ -915,8 +934,8 @@ class Nlp4plpEncoder(CorpusEncoder):
         instances = list()
         for inst in corpus.insts:
             cur_inst = [self.encode_inst(getattr(inst, f_t)) for f_t in feat_type]
-            #feats = [self.encode_inst(getattr(inst, f_t)) for f_t in feat_type]
-            #cur_inst = list(zip(*feats))
+            # feats = [self.encode_inst(getattr(inst, f_t)) for f_t in feat_type]
+            # cur_inst = list(zip(*feats))
             instances.append(cur_inst)
             if len(instances) == batch_size:
                 yield instances
@@ -930,11 +949,12 @@ class Nlp4plpEncoder(CorpusEncoder):
         Transforms an encoded batch to the corresponding torch tensor
         :return: tensor of batch padded to maxlen, and a tensor of actual instance lengths
         '''
-        #lengths = [len(inst) for inst in cur_insts]
+        # lengths = [len(inst) for inst in cur_insts]
         lengths = [len(inst[0]) for inst in cur_insts]
         n_inst, maxlen = len(cur_insts), max(lengths)
 
-        t = torch.zeros(n_inst, n_feat_types, maxlen, dtype=torch.int64) + self.vocab.pad  # this creates a tensor of padding indices
+        t = torch.zeros(n_inst, n_feat_types, maxlen,
+                        dtype=torch.int64) + self.vocab.pad  # this creates a tensor of padding indices
 
         # copy the sequence
         for idx, (inst, length) in enumerate(zip(cur_insts, lengths)):
@@ -1071,17 +1091,21 @@ class Nlp4plpEncDecEncoder(CorpusEncoder):
             else:
                 return self.label_vocab.unk
 
-    def get_batches(self, corpus, batch_size):
+    def get_batches(self, corpus, batch_size, token_ids=False):
         instances = list()
         labels = list()
         for inst in corpus.insts:
-            cur_inst = self.encode_inst(inst.txt)
+            if token_ids:
+                cur_inst = inst.tok_ids
+            else:
+                cur_inst = self.encode_inst(inst.txt)
             instances.append(cur_inst)
             cur_labels = self.encode_labels(inst.label)
             labels.append(cur_labels)
             if len(instances) == batch_size:
                 yield (instances, labels)
                 instances = list()
+                token_ids = list()
                 labels = list()
 
         if instances:
@@ -1194,3 +1218,25 @@ class DataUtils:
         test_split = FileUtils.read_list('test_ids.txt', dir_splits)
 
         return (train_split, val_split, test_split)
+
+
+def get_bert_embs(insts, bert_client, bert_embs={}):
+    #  e = bert_client.encode(['First do it', 'then do it right', 'then do it better'])
+    #  e[0] --> first sentence
+    #  e[0][0] --> CLS
+    #  e[0][1] --> w0
+    #  ...
+    #  e[0][3] -->  w2
+    #  e[0][4] --> SEP
+    #  e[0][5] --> zero embedding for padding
+
+    # for inst in self.insts:
+    #    print(inst)
+    embs = bert_client.encode([" ".join(inst.txt) for inst in insts])
+    for inst, emb in zip(insts, embs):  # embs for one instance
+        # get token emb
+        for i in range(len(inst.txt)):
+            tok_i = len(bert_embs) + 1
+            #bert_embs[tok_i] = list([float(el) for el in emb[1:][i]])
+            bert_embs[tok_i] = emb[1:][i]
+    return bert_embs

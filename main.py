@@ -1,10 +1,11 @@
 import argparse
 import os
+import pickle
 from datetime import datetime
 import random
 
 from pycocoevalcap.eval import COCOEvalCap
-from util import f1_score, FileUtils
+from util import f1_score, FileUtils, load_json, save_json
 
 random.seed(0)
 
@@ -22,7 +23,7 @@ torch.cuda.manual_seed(0)
 from sklearn.metrics import accuracy_score, mean_absolute_error
 
 from corpus_util import Nlp4plpCorpus, Nlp4plpEncoder, Nlp4plpRegressionEncoder, Nlp4plpPointerNetEncoder, \
-    Nlp4plpEncDecEncoder
+    Nlp4plpEncDecEncoder, get_bert_embs
 from net import LSTMClassifier, LSTMRegression, PointerNet, EncoderDecoder
 
 
@@ -86,6 +87,12 @@ def inspect_encdec(corp, label_vocab, _y_true, _y_pred):
 def main():
     arg_parser = argparse.ArgumentParser(description="parser for End-to-End Memory Networks")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training")
+    arg_parser.add_argument("--bert", action="store_true",
+                            help="use bert to initialize token embeddings")
+    arg_parser.add_argument("--no-load-bert", action="store_true",
+                            help="will not load presaved embs, but get them from scratch")
+    arg_parser.add_argument("--bert-tok-emb-path", type=str, default="",
+                            help="path to bert embeddings for all toks in train/dev/test in json format")
     arg_parser.add_argument("--bidir", action="store_true")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="",
@@ -102,7 +109,7 @@ def main():
     arg_parser.add_argument("--label-type", type=str,
                             help="group | take | take_wr | both_take | take3 | take_declen2 | take_wr_declen2 | take_declen3 | take_wr_declen3 | both_take_declen3. To use with PointerNet.")
     arg_parser.add_argument("--label-type-dec", type=str,
-                            help="predicates | predicates-all | predicates-arguments-all. To use with EncDec.")
+                            help="predicates | predicates-all | predicates-arguments-all | predicates-arguments-all-parenth . To use with EncDec.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
     arg_parser.add_argument("--max-output-len", type=int, default=50,
@@ -156,9 +163,28 @@ def main():
         dev_corp.get_labels(label_type=args.label_type_dec, max_output_len=args.max_output_len)
         test_corp.get_labels(label_type=args.label_type_dec)
 
+        c = train_corp.add_tok_ids()
+        c = dev_corp.add_tok_ids(c)
+        c = test_corp.add_tok_ids(c)
+
         train_corp.remove_none_labels()
         dev_corp.remove_none_labels()
         test_corp.remove_none_labels()
+
+        if args.bert:
+            if args.no_load_bert:
+                print("collecting bert embeddings...")
+                from bert_serving.client import BertClient
+                bc = BertClient()  # root@ssuster:/home/suster# bert-serving-start -pooling_strategy NONE -model_dir /nas/corpora/bert_models/uncased_L-24_H-1024_A-16/ -num_worker=1
+                bert_embs = get_bert_embs(train_corp.insts, bc)
+                bert_embs = get_bert_embs(dev_corp.insts, bc, bert_embs)
+                bert_embs = get_bert_embs(test_corp.insts, bc, bert_embs)
+                pickle.dump(bert_embs, open(args.bert_tok_emb_path, "wb"))
+                print("finished collecting bert embeddings")
+            else:
+                #bert_embs = load_json(args.bert_tok_emb_path+".json")
+                bert_embs = pickle.load(open(args.bert_tok_emb_path, "rb"))
+            assert c == len(bert_embs) + 1
     else:
         raise ValueError(f"Model should be '{model_names}'")
 
@@ -255,7 +281,8 @@ def main():
                           'max_output_len': args.max_output_len,
                           'label_size': len(corpus_encoder.label_vocab),
                           'f_model': f_model,
-                          'bidir': args.bidir
+                          'bidir': args.bidir,
+                          'bert_embs': bert_embs if args.bert else None
                           }
             if args.feat_type:
                 feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
