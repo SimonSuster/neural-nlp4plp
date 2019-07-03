@@ -140,14 +140,16 @@ def get_file_list(topdir, identifiers=None, all_levels=False):
 
     return filelist
 
+
 def load_bert(bert_embs, emb_dim=1024, freeze=False):
-    vocab_size = len(bert_embs) + 1
+    vocab_size = max(bert_embs.keys())+1
     e_m = np.random.normal(size=(vocab_size, emb_dim), loc=0, scale=0.1)
     for i, e in bert_embs.items():
         e_m[i] = e
     embs_tensor = nn.Embedding.from_pretrained(float_tensor_type(e_m), freeze=freeze)
 
     return embs_tensor, emb_dim
+
 
 def load_emb(fname, word_idx, freeze=False):
     pretr_embs, pretr_emb_idx, n = load_w2v(fname)

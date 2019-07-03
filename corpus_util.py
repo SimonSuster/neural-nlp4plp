@@ -1235,8 +1235,6 @@ def get_bert_embs(insts, bert_client, bert_embs={}):
     embs = bert_client.encode([" ".join(inst.txt) for inst in insts])
     for inst, emb in zip(insts, embs):  # embs for one instance
         # get token emb
-        for i in range(len(inst.txt)):
-            tok_i = len(bert_embs) + 1
-            #bert_embs[tok_i] = list([float(el) for el in emb[1:][i]])
+        for i, tok_i in enumerate(inst.tok_ids):
             bert_embs[tok_i] = emb[1:][i]
     return bert_embs

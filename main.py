@@ -98,7 +98,7 @@ def main():
     arg_parser.add_argument("--data-dir", type=str, default="",
                             help="path to folder from where data is loaded. Subfolder should be train/dev/test")
     arg_parser.add_argument("--dropout", type=float, default=0.0)
-    arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
+    arg_parser.add_argument("--embed-size", type=int, help="embedding dimension")
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
     arg_parser.add_argument("--feat-onehot", action="store_true", help="use onehot feature encoding instead of embedded")
     arg_parser.add_argument('--feat-type', nargs='+', help="Which feature to use: pos | rels | num")
@@ -126,6 +126,7 @@ def main():
     # arg_parser.add_argument("--test", type=int, default=1)
     # arg_parser.add_argument("--train", type=int, default=1)
     args = arg_parser.parse_args()
+    args.embed_size = 1024 if args.bert else 50
 
     # initialize corpora
     if args.model == "lstm-enc-discrete-dec":
@@ -184,7 +185,6 @@ def main():
             else:
                 #bert_embs = load_json(args.bert_tok_emb_path+".json")
                 bert_embs = pickle.load(open(args.bert_tok_emb_path, "rb"))
-            assert c == len(bert_embs) + 1
     else:
         raise ValueError(f"Model should be '{model_names}'")
 
