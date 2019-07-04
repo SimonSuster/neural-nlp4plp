@@ -1123,14 +1123,14 @@ class Nlp4plpEncDecEncoder(CorpusEncoder):
         if instances:
             yield instances
 
-    def batch_to_tensors(self, cur_insts, cur_labels, device):
+    def batch_to_tensors(self, cur_insts, cur_labels, device, padding_idx):
         '''
         Transforms an encoded batch to the corresponding torch tensor
         :return: tensor of batch padded to maxlen, and a tensor of actual instance lengths
         '''
         lengths = [len(inst) for inst in cur_insts]
         n_inst, maxlen = len(cur_insts), max(lengths)
-        t = torch.zeros(n_inst, maxlen, dtype=torch.int64) + self.vocab.pad  # this creates a tensor of padding indices
+        t = torch.zeros(n_inst, maxlen, dtype=torch.int64) + padding_idx  # this creates a tensor of padding indices
         # copy the sequence
         for idx, (inst, length) in enumerate(zip(cur_insts, lengths)):
             t[idx, :length].copy_(torch.tensor(inst))

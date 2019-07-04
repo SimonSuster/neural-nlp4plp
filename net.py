@@ -1061,7 +1061,7 @@ class EncoderDecoder(nn.Module):
                     cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
                                                                                            len(self.feat_type))
                 cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(
-                    cur_insts, cur_labels, self.device)
+                    cur_insts, cur_labels, self.device, padding_idx=0 if self.bert_embs else corpus_encoder.vocab.pad)
                 output_length = max(cur_label_lengths).item()
                 # forward pass
                 fwd_out, labels = self.forward(cur_insts, cur_feats, cur_lengths,
