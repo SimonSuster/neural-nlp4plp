@@ -1106,7 +1106,8 @@ class EncoderDecoder(nn.Module):
                                                                                        len(self.feat_type))
             cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(cur_insts,
                                                                                                     cur_labels,
-                                                                                                    self.device)
+                                                                                                    self.device,
+                                                                                                    padding_idx=0 if self.bert_embs else corpus_encoder.vocab.pad)
             y_true.extend(cur_labels.cpu().numpy())
 
             # forward pass
