@@ -1,6 +1,7 @@
 import argparse
 import os
 import pickle
+from copy import deepcopy
 from datetime import datetime
 import random
 
@@ -54,6 +55,38 @@ def save_preds_encdec(corp, label_vocab, _y_true, _y_pred, f_name, dir_out="../o
     print(f"Writing predictions to {dir_out}{f_name}")
 
 
+def save_preds_encdec_pl(corp, label_vocab, _y_true, _y_pred, log_name, dir_out="../out/"):
+    def final_repl(n):
+        k = []
+        for i in n:
+            if i.startswith(")"):
+                k.append(")")
+            else:
+                k.append(i)
+        new_k = " ".join(k).replace(" ", "").replace(".", ".\n")
+        return new_k
+
+    """ as a prolog program """
+    print("Saving predictions from the best model:")
+    dir_out = f"{dir_out}log_w{log_name}/"
+    print(f"Save preds dir: {dir_out}")
+    if not os.path.exists(dir_out):
+        os.makedirs(dir_out)
+    for c, (y_t, y_p) in enumerate(zip(_y_true, _y_pred)):
+        f_name_t = os.path.basename(corp.insts[c].f + "_t")
+        f_name_p = os.path.basename(corp.insts[c].f + "_p")
+        with open(dir_out + f_name_t, "w") as f_out_t, open(dir_out + f_name_p, "w") as f_out_p:
+            y_t = list(y_t)
+            y_p = list(y_p)
+            t = [label_vocab.idx2word[y] for y in y_t]
+            p = [label_vocab.idx2word[y] for y in y_p]
+            t = final_repl(t)
+            p = final_repl(p)
+            f_out_t.write(t)
+            f_out_p.write(p)
+
+
+
 def inspect_encdec(corp, label_vocab, _y_true, _y_pred):
     print("Inspecting predictions from the best model:")
     correct = []
@@ -84,8 +117,23 @@ def inspect_encdec(corp, label_vocab, _y_true, _y_pred):
         print([label_vocab.idx2word[y] for y in y_p])
 
 
+def augment_train(train_corp, fac=10):
+    fs_new, insts_new = [], []
+    for f, inst in zip(train_corp.fs, train_corp.insts):
+        fs_new.extend([f]*fac)
+        for i in range(fac):
+            inst_new = deepcopy(inst)
+            np.random.shuffle(inst_new.statements)
+            insts_new.append(inst_new)
+    train_corp.fs = train_corp.fs + fs_new
+    train_corp.insts = train_corp.insts + insts_new
+
+    return train_corp
+
+
 def main():
     arg_parser = argparse.ArgumentParser(description="parser for End-to-End Memory Networks")
+    arg_parser.add_argument("--augment-train", action="store_true")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training")
     arg_parser.add_argument("--bert", action="store_true",
                             help="use bert to initialize token embeddings")
@@ -97,6 +145,7 @@ def main():
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="",
                             help="path to folder from where data is loaded. Subfolder should be train/dev/test")
+    arg_parser.add_argument("--debug", action="store_true")
     arg_parser.add_argument("--dropout", type=float, default=0.0)
     arg_parser.add_argument("--embed-size", type=int, help="embedding dimension")
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
@@ -112,7 +161,7 @@ def main():
                             help="predicates | predicates-all | predicates-arguments-all | predicates-arguments-all-parenth . To use with EncDec.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
-    arg_parser.add_argument("--max-output-len", type=int, default=50,
+    arg_parser.add_argument("--max-output-len", type=int, default=500,
                             help="Maximum decoding length for EncDec models at prediction time.")
     model_names = "lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec | lstm-enc-dec"
     arg_parser.add_argument("--model", type=str, help=f"{model_names}")
@@ -157,8 +206,17 @@ def main():
         test_corp.remove_none_labels()
     elif args.model == "lstm-enc-dec":
         train_corp = Nlp4plpCorpus(args.data_dir + "train")
+        if args.augment_train:
+            train_corp = augment_train(train_corp)
+        print(f"Size of train: {len(train_corp.insts)}")
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
         test_corp = Nlp4plpCorpus(args.data_dir + "test")
+        if args.debug:
+            train_corp.fs = train_corp.fs[:10]
+            train_corp.insts = train_corp.insts[:10]
+            dev_corp.fs = dev_corp.fs[:10]
+            dev_corp.insts = dev_corp.insts[:10]
+            test_corp.insts = test_corp.insts[:10]
 
         train_corp.get_labels(label_type=args.label_type_dec, max_output_len=args.max_output_len)
         dev_corp.get_labels(label_type=args.label_type_dec, max_output_len=args.max_output_len)
@@ -360,7 +418,7 @@ def main():
         _y_pred, _y_true = classifier.predict(dev_corp, feature_encoder, corpus_encoder)
         inspect_encdec(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred)
         if args.save_model:
-            save_preds_encdec(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred, f_model)
+            save_preds_encdec_pl(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred, f_model)
 
     if not args.save_model:
         classifier.remove(f_model=classifier.f_model)

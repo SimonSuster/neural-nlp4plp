@@ -703,8 +703,8 @@ class Nlp4plpCorpus:
             get_label = self.get_predicates_all_label
         elif label_type == "predicates-arguments-all":
             get_label = self.get_predicates_arguments_all_label
-        elif label_type == "predicates-arguments-all-parenth":
-            get_label = self.get_predicates_arguments_all_parenth_label
+        #elif label_type == "predicates-arguments-all-parenth":
+        #    get_label = self.get_predicates_arguments_all_parenth_label
         else:
             raise ValueError("invalid label_type specified")
 
