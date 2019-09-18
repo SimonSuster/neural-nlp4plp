@@ -24,8 +24,8 @@ torch.cuda.manual_seed(0)
 from sklearn.metrics import accuracy_score, mean_absolute_error
 
 from corpus_util import Nlp4plpCorpus, Nlp4plpEncoder, Nlp4plpRegressionEncoder, Nlp4plpPointerNetEncoder, \
-    Nlp4plpEncDecEncoder, get_bert_embs
-from net import LSTMClassifier, LSTMRegression, PointerNet, EncoderDecoder
+    Nlp4plpEncDecEncoder, get_bert_embs, Nlp4plpEncSplitDecEncoder
+from net import LSTMClassifier, LSTMRegression, PointerNet, EncoderDecoder, EncoderSplitDecoder
 
 
 def get_correct_problems(test_corp, y_pred, bin_edges):
@@ -55,7 +55,7 @@ def save_preds_encdec(corp, label_vocab, _y_true, _y_pred, f_name, dir_out="../o
     print(f"Writing predictions to {dir_out}{f_name}")
 
 
-def save_preds_encdec_pl(corp, label_vocab, _y_true, _y_pred, log_name, dir_out="../out/"):
+def save_preds_encdec_pl(corp, _y_true, _y_pred, log_name, label_vocab=None, dir_out="../out/"):
     def final_repl(n):
         k = []
         for i in n:
@@ -78,13 +78,16 @@ def save_preds_encdec_pl(corp, label_vocab, _y_true, _y_pred, log_name, dir_out=
         with open(dir_out + f_name_t, "w") as f_out_t, open(dir_out + f_name_p, "w") as f_out_p:
             y_t = list(y_t)
             y_p = list(y_p)
-            t = [label_vocab.idx2word[y] for y in y_t]
-            p = [label_vocab.idx2word[y] for y in y_p]
+            if label_vocab is not None:
+                t = [label_vocab.idx2word[y] for y in y_t]
+                p = [label_vocab.idx2word[y] for y in y_p]
+            else:
+                t = y_t
+                p = y_p
             t = final_repl(t)
             p = final_repl(p)
             f_out_t.write(t)
             f_out_p.write(p)
-
 
 
 def inspect_encdec(corp, label_vocab, _y_true, _y_pred):
@@ -142,6 +145,7 @@ def main():
     arg_parser.add_argument("--bert-tok-emb-path", type=str, default="",
                             help="path to bert embeddings for all toks in train/dev/test in json format")
     arg_parser.add_argument("--bidir", action="store_true")
+    arg_parser.add_argument("--constrained-decoding", action="store_true")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="",
                             help="path to folder from where data is loaded. Subfolder should be train/dev/test")
@@ -158,16 +162,17 @@ def main():
     arg_parser.add_argument("--label-type", type=str,
                             help="group | take | take_wr | both_take | take3 | take_declen2 | take_wr_declen2 | take_declen3 | take_wr_declen3 | both_take_declen3. To use with PointerNet.")
     arg_parser.add_argument("--label-type-dec", type=str,
-                            help="predicates | predicates-all | predicates-arguments-all | predicates-arguments-all-parenth . To use with EncDec.")
+                            help="predicates | predicates-all | predicates-arguments-all | full-pl | full-pl-no-arg-id | full-pl-split. To use with EncDec.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
     arg_parser.add_argument("--max-output-len", type=int, default=500,
                             help="Maximum decoding length for EncDec models at prediction time.")
-    model_names = "lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec | lstm-enc-dec"
+    model_names = "lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec | lstm-enc-dec | lstm-enc-split-dec"
     arg_parser.add_argument("--model", type=str, help=f"{model_names}")
     arg_parser.add_argument("--n-bins", type=int, default=10, help="number of bins for discretization of answers")
     arg_parser.add_argument("--n-layers", type=int, default=1, help="number of layers for the RNN")
     arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
+    arg_parser.add_argument("--oracle-dec1", action="store_true", help="use gold seq instead of dec1 output to feed to dec2")
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
     arg_parser.add_argument("--print-correct", action="store_true")
@@ -204,7 +209,7 @@ def main():
         train_corp.remove_none_labels()
         dev_corp.remove_none_labels()
         test_corp.remove_none_labels()
-    elif args.model == "lstm-enc-dec":
+    elif args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
         train_corp = Nlp4plpCorpus(args.data_dir + "train")
         if args.augment_train:
             train_corp = augment_train(train_corp)
@@ -248,7 +253,7 @@ def main():
 
     feature_encoder = None
     test_score_runs = []
-    if args.model == "lstm-enc-dec":
+    if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
         test_score_f1_runs = []
         test_score_bleu4_runs = []
     for n in range(args.n_runs):
@@ -267,7 +272,8 @@ def main():
                           'batch_size': args.batch_size,
                           'word_idx': corpus_encoder.vocab.word2idx,
                           'pretrained_emb_path': args.pretrained_emb_path,
-                          'f_model': f_model
+                          'f_model': f_model,
+                          'cuda': args.cuda
                           }
             classifier = LSTMClassifier(**net_params)
             eval_score = accuracy_score
@@ -285,7 +291,9 @@ def main():
                           'batch_size': args.batch_size,
                           'word_idx': corpus_encoder.vocab.word2idx,
                           'pretrained_emb_path': args.pretrained_emb_path,
-                          'f_model': f_model
+                          'f_model': f_model,
+                          'cuda': args.cuda
+
                           }
             classifier = LSTMRegression(**net_params)
             eval_score = mean_absolute_error
@@ -306,7 +314,8 @@ def main():
                           'output_len': int(args.label_type[-1]) if "declen" in args.label_type else 1,
                           # decoder output length
                           'f_model': f_model,
-                          'bidir': args.bidir
+                          'bidir': args.bidir,
+                          'cuda': args.cuda
                           }
             if args.feat_type:
                 feature_encoder = Nlp4plpPointerNetEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
@@ -340,7 +349,8 @@ def main():
                           'label_size': len(corpus_encoder.label_vocab),
                           'f_model': f_model,
                           'bidir': args.bidir,
-                          'bert_embs': bert_embs if args.bert else None
+                          'bert_embs': bert_embs if args.bert else None,
+                          'cuda': args.cuda
                           }
             if args.feat_type:
                 feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
@@ -352,6 +362,49 @@ def main():
                 net_params['feat_onehot'] = args.feat_onehot
 
             classifier = EncoderDecoder(**net_params)
+            eval_score = accuracy_score
+        elif args.model == "lstm-enc-split-dec":
+            # initialize vocab
+            corpus_encoder = Nlp4plpEncSplitDecEncoder.from_corpus(train_corp, dev_corp)
+            # print(corpus_encoder.label_vocab.to_dict()["word2idx"])
+            print(f"n labels: {len(corpus_encoder.label_vocab)}")
+            print(f"n labels2: {len(corpus_encoder.label_vocab2)}")
+            # max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
+            f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+            print(f"f_model: {f_model}")
+            net_params = {'n_layers': args.n_layers,
+                          'hidden_dim': args.hidden_dim,
+                          'vocab_size': corpus_encoder.vocab.size,
+                          'padding_idx': corpus_encoder.vocab.pad,
+                          'label_padding_idx': corpus_encoder.label_vocab.pad,
+                          'label_padding_idx2': corpus_encoder.label_vocab2.pad,
+                          'embedding_dim': args.embed_size,
+                          'dropout': args.dropout,
+                          'batch_size': args.batch_size,
+                          'word_idx': corpus_encoder.vocab.word2idx,
+                          'label_idx': corpus_encoder.label_vocab.word2idx,
+                          'label_idx2': corpus_encoder.label_vocab2.word2idx,
+                          'pretrained_emb_path': args.pretrained_emb_path,
+                          'max_output_len': args.max_output_len,
+                          'label_size': len(corpus_encoder.label_vocab),
+                          'label_size2': len(corpus_encoder.label_vocab2),
+                          'f_model': f_model,
+                          'bidir': args.bidir,
+                          'bert_embs': bert_embs if args.bert else None,
+                          'oracle_dec1': args.oracle_dec1,
+                          'constrained_decoding': args.constrained_decoding,
+                          'cuda': args.cuda
+                          }
+            if args.feat_type:
+                feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
+                net_params['feature_idx'] = feature_encoder.vocab.word2idx
+                net_params['feat_size'] = feature_encoder.vocab.size
+                net_params['feat_padding_idx'] = feature_encoder.vocab.pad
+                net_params['feat_emb_dim'] = args.feat_embed_size
+                net_params['feat_type'] = args.feat_type
+                net_params['feat_onehot'] = args.feat_onehot
+
+            classifier = EncoderSplitDecoder(**net_params)
             eval_score = accuracy_score
 
         else:
@@ -371,14 +424,23 @@ def main():
             classifier = PointerNet.load(f_model=net_params['f_model'])
         elif args.model == 'lstm-enc-dec':
             classifier = EncoderDecoder.load(f_model=net_params['f_model'])
+        elif args.model == 'lstm-enc-split-dec':
+            classifier = EncoderSplitDecoder.load(f_model=net_params['f_model'])
         else:
             raise ValueError(f"Model should be '{model_names}'")
 
         # get predictions
-        _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
+        if args.model == "lstm-enc-split-dec":
+            _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(test_corp, feature_encoder, corpus_encoder)
+            y_pred1 = [str(y) for y in _y_pred1]
+            y_pred2 = [str(y) for y in _y_pred2]
+            y_true1 = [str(y) for y in _y_true1]
+            y_true2 = [str(y) for y in _y_true2]
+        else:
+            _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
 
         # for accuracy calculation
-        if args.model == "lstm-enc-dec" or net_params["output_len"] > 1:
+        if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"} or net_params["output_len"] > 1:
             y_true = [str(y) for y in _y_true]
             y_pred = [str(y) for y in _y_pred]
         else:
@@ -387,11 +449,14 @@ def main():
 
         # compute scoring metrics
         test_acc = eval_score(y_true=y_true, y_pred=y_pred)
-
+        if args.oracle_dec1:
+            test_acc1 = accuracy_score(y_true=y_true1, y_pred=y_pred1)
+            test_acc2 = accuracy_score(y_true=y_true2, y_pred=y_pred2)
+            print(f"acc dec1: {test_acc1}, acc dec2: {test_acc2}")
         if not args.print_correct and args.model == "lstm-enc-discrete-dec":
             correct = get_correct_problems(test_corp, y_pred, test_corp.fitted_discretizer.bin_edges_[0])
             print(correct)
-        if args.model == "lstm-enc-dec":
+        if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
             test_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
             y_true_dict = {c: [" ".join([str(i) for i in t])] for c, t in enumerate(_y_true)}
             y_pred_dict = {c: [" ".join([str(i) for i in p])] for c, p in enumerate(_y_pred)}
@@ -399,14 +464,14 @@ def main():
             test_coco_eval.evaluate()
             test_coco = test_coco_eval.eval
             test_bleu4 = test_coco["Bleu_4"]
-            print('TEST SCORE: acc: %.3f, f1: %.3f, bleu4: %.3f' % (test_acc, test_f1, test_bleu4))
+            print('TEST SCORE: acc: %.3f, f1: %.3f, bleu4: %.3f, total: %i' % (test_acc, test_f1, test_bleu4, len(y_pred)))
             test_score_runs.append(test_acc)
             test_score_f1_runs.append(test_f1)
             test_score_bleu4_runs.append(test_bleu4)
         else:
             print('TEST SCORE: %.3f' % test_acc)
             test_score_runs.append(test_acc)
-    if args.model == "lstm-enc-dec":
+    if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
         print('AVG TEST SCORE over %d runs: %.3f, f1: %.3f, bleu4: %.3f' % (
             args.n_runs, np.mean(test_score_runs), np.mean(test_score_f1_runs), np.mean(test_score_bleu4_runs)))
     else:
@@ -415,11 +480,16 @@ def main():
     if args.inspect:
         #inspect(test_corp, _y_true, _y_pred)
         # get dev predictions
-        _y_pred, _y_true = classifier.predict(dev_corp, feature_encoder, corpus_encoder)
-        inspect_encdec(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred)
+        if args.model == "lstm-enc-split-dec":
+            _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(dev_corp, feature_encoder, corpus_encoder)
+        else:
+            _y_pred, _y_true = classifier.predict(dev_corp, feature_encoder, corpus_encoder)
+        #inspect_encdec(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred)
         if args.save_model:
-            save_preds_encdec_pl(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred, f_model)
-
+            if args.label_type_dec == "full-pl":
+                save_preds_encdec_pl(dev_corp, _y_true, _y_pred, f_model, label_vocab=corpus_encoder.label_vocab)
+            elif args.label_type_dec == "full-pl-split":
+                save_preds_encdec_pl(dev_corp, _y_true, _y_pred, f_model)
     if not args.save_model:
         classifier.remove(f_model=classifier.f_model)
 

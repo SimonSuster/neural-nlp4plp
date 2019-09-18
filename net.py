@@ -1,5 +1,6 @@
 import os
 import random
+import re
 
 random.seed(0)
 
@@ -20,11 +21,12 @@ from sklearn.metrics import accuracy_score, mean_squared_error
 
 from util import TorchUtils, load_emb, f1_score, load_bert
 
+import traceback
 
 class Encoder(nn.Module):
     def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
                  word_idx, pretrained_emb_path, bidir, bert_embs, feature_idx, feat_size, feat_padding_idx,
-                 feat_emb_dim, feat_type, feat_onehot):
+                 feat_emb_dim, feat_type, feat_onehot, cuda=0):
         super().__init__()
         self.n_lstm_layers = n_layers * 2 if bidir else n_layers
         self.hidden_dim = hidden_dim // 2 if bidir else hidden_dim
@@ -53,7 +55,7 @@ class Encoder(nn.Module):
         self.final_emb_dim = self.emb_dim + self.feat_dim
 
         if torch.cuda.is_available():
-            self.device = torch.device('cuda:0')
+            self.device = torch.device(f'cuda:{cuda}')
         else:
             self.device = torch.device('cpu')
 
@@ -122,6 +124,9 @@ class Encoder(nn.Module):
         # hidden gets updated and cell states at the end of the sequence
         lstm_out, hidden = self.lstm(embs, hidden)
         # pad the sequences again to convert to original padded data shape
+        #traceback.print_stack(limit=4)
+        #print(embs[0].shape,embs[1].shape, lstm_out[0].shape, lstm_out[1].shape, hidden[0].shape, hidden[1].shape)
+
         lstm_out, lengths = nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first=False)
 
         # unsort batch
@@ -134,7 +139,7 @@ class Encoder(nn.Module):
 class LSTMClassifier(nn.Module):
     # based on https://github.com/MadhumitaSushil/sepsis/blob/master/src/classifiers/lstm.py
     def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, label_size, batch_size,
-                 word_idx, pretrained_emb_path, f_model):
+                 word_idx, pretrained_emb_path, f_model, cuda=0):
         super().__init__()
         self.n_lstm_layers = n_layers
         self.hidden_dim = hidden_dim
@@ -148,12 +153,12 @@ class LSTMClassifier(nn.Module):
         self.f_model = f_model
 
         if torch.cuda.is_available():
-            self.device = torch.device('cuda:0')
+            self.device = torch.device(f'cuda:{cuda}')
         else:
             self.device = torch.device('cpu')
 
         self.encoder = Encoder(n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
-                               word_idx, pretrained_emb_path)
+                               word_idx, pretrained_emb_path, cuda=cuda)
         self.hidden2label = nn.Linear(self.hidden_dim, self.n_labels)  # hidden to output layer
         self.to(self.device)
 
@@ -260,7 +265,7 @@ class LSTMClassifier(nn.Module):
 
 class LSTMRegression(nn.Module):
     def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size, word_idx,
-                 pretrained_emb_path, f_model):
+                 pretrained_emb_path, f_model, cuda=0):
         super().__init__()
 
         self.n_lstm_layers = n_layers
@@ -274,7 +279,7 @@ class LSTMRegression(nn.Module):
         self.f_model = f_model
 
         if torch.cuda.is_available():
-            self.device = torch.device('cuda:0')
+            self.device = torch.device(f'cuda:{cuda}')
         else:
             self.device = torch.device('cpu')
 
@@ -286,7 +291,7 @@ class LSTMRegression(nn.Module):
                                                 padding_idx=padding_idx)  # embedding layer, initialized at random
 
         self.encoder = Encoder(n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
-                               word_idx, pretrained_emb_path)
+                               word_idx, pretrained_emb_path, cuda=cuda)
 
         self.hidden2label = nn.Linear(self.hidden_dim, 1)  # hidden to output node
         # self.sigmoid = nn.Sigmoid()
@@ -395,7 +400,7 @@ class PointerAttention(nn.Module):
     """
 
     def __init__(self, input_dim,
-                 hidden_dim):
+                 hidden_dim, cuda=0):
         """
         Initiate Attention
 
@@ -404,7 +409,7 @@ class PointerAttention(nn.Module):
         """
         super().__init__()
         if torch.cuda.is_available():
-            self.device = torch.device('cuda:0')
+            self.device = torch.device(f'cuda:{cuda}')
         else:
             self.device = torch.device('cpu')
 
@@ -464,7 +469,7 @@ class PointerDecoder(nn.Module):
     """
 
     def __init__(self, hidden_dim, vocab_size, padding_idx, embedding_dim, word_idx, pretrained_emb_path, output_len,
-                 feature_idx, feat_size, feat_padding_idx, feat_emb_dim):
+                 feature_idx, feat_size, feat_padding_idx, feat_emb_dim, cuda=0):
         """
         Initiate Decoder
 
@@ -473,7 +478,7 @@ class PointerDecoder(nn.Module):
         """
         super().__init__()
         if torch.cuda.is_available():
-            self.device = torch.device('cuda:0')
+            self.device = torch.device(f'cuda:{cuda}')
         else:
             self.device = torch.device('cpu')
 
@@ -605,7 +610,7 @@ class PointerDecoder(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, word_idx,
-                 pretrained_emb_path, max_output_len, n_labels):
+                 pretrained_emb_path, max_output_len, n_labels, cuda=0):
         """
         Initiate Decoder
 
@@ -614,7 +619,7 @@ class Decoder(nn.Module):
         """
         super().__init__()
         if torch.cuda.is_available():
-            self.device = torch.device('cuda:0')
+            self.device = torch.device(f'cuda:{cuda}')
         else:
             self.device = torch.device('cpu')
 
@@ -638,7 +643,7 @@ class Decoder(nn.Module):
         # Used for propagating .cuda() command
         self.to(self.device)
 
-    def forward(self, sentence, sent_lengths, output_length, decoder_input, hidden, context, cur_labels):
+    def forward(self, sent_lengths, output_length, decoder_input, hidden, context, cur_labels, labels=None, label_embeddings=None):
         """
         Decoder - Forward-pass
 
@@ -657,52 +662,17 @@ class Decoder(nn.Module):
         outputs = []
         preds = []
 
-        def step(x, hidden):
-            """
-            Recurrence step function
-
-            :param Tensor x: Input at time t
-            :param tuple(Tensor, Tensor) hidden: Hidden states at time t-1
-            :return: Hidden states at time t (h, c), Attention probabilities (Alpha)
-            """
-
-            # Regular LSTM
-            h, c = hidden
-
-            gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
-            input, forget, cell, out = gates.chunk(4, 1)
-
-            input = F.sigmoid(input)
-            forget = F.sigmoid(forget)
-            cell = F.tanh(cell)
-            out = F.sigmoid(out)
-
-            c_t = (forget * c) + (input * cell)
-            h_t = out * F.tanh(c_t)
-
-            # Attention section
-            weighted, output_att = self.att(h_t, context, None)
-            hidden_t = F.tanh(self.hidden_out(torch.cat((weighted, h_t), 1)))
-
-            # hidden_t: b*hidden_dim
-            # weighted: b*hidden_dim
-            # x: b*final_emb_dim
-            output = self.out(torch.cat((hidden_t, weighted, x), dim=1))
-
-            return hidden_t, c_t, output
-
         is_inference = output_length is None
         if is_inference:
             # predict for max len so that we can use batches, prune later
             output_length = self.max_output_len
         # Recurrence loop
         for i in range(output_length):
-            h_t, c_t, outs = step(decoder_input, hidden)
+            h_t, c_t, outs = self.step(i, decoder_input, hidden, context, labels, label_embeddings)
             hidden = (h_t, c_t)
             # Get maximum probabilities and indices
             max_probs, indices = outs.max(1)
             # Embed output labels for next input
-            # TODO teacher forcing
             if self.teacher_forcing and not is_inference:
                 decoder_input = self.label_embeddings(cur_labels[:, i])
             else:
@@ -715,6 +685,189 @@ class Decoder(nn.Module):
         preds = torch.cat(preds, 1)  # (b * output_len)
 
         return (outputs, preds), hidden
+
+    def step(self, i, x, hidden, context, labels=None, label_embeddings=None):
+        """
+        Recurrence step function
+
+        :param int i: time step
+        :param Tensor x: Input at time t
+        :param tuple(Tensor, Tensor) hidden: Hidden states at time t-1
+        :return: Hidden states at time t (h, c), Attention probabilities (Alpha)
+        """
+
+        # Regular LSTM
+        h, c = hidden
+
+        gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
+        input, forget, cell, out = gates.chunk(4, 1)
+
+        input = F.sigmoid(input)
+        forget = F.sigmoid(forget)
+        cell = F.tanh(cell)
+        out = F.sigmoid(out)
+
+        c_t = (forget * c) + (input * cell)
+        h_t = out * F.tanh(c_t)
+
+        # Attention section
+        weighted, output_att = self.att(h_t, context, None)
+        hidden_t = F.tanh(self.hidden_out(torch.cat((weighted, h_t), 1)))
+
+        # hidden_t: b*hidden_dim
+        # weighted: b*hidden_dim
+        # x: b*final_emb_dim
+        output = self.out(torch.cat((hidden_t, weighted, x), dim=1))
+
+        return hidden_t, c_t, output
+
+
+class ConstrainedDecoder(nn.Module):
+    def __init__(self, hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, word_idx,
+                 pretrained_emb_path, max_output_len, n_labels, n_labels_dec1, label_idx_dec1, label_idx_dec2, cuda=0):
+        """
+        Initiate Decoder
+
+        :param int embedding_dim: Number of embeddings in Pointer-Net
+        :param int hidden_dim: Number of hidden units for the decoder's RNN
+        """
+        super().__init__()
+        if torch.cuda.is_available():
+            self.device = torch.device(f'cuda:{cuda}')
+        else:
+            self.device = torch.device('cpu')
+
+        self.emb_dim = embedding_dim
+        self.hidden_dim = hidden_dim
+        self.vocab_size = vocab_size
+        self.max_output_len = max_output_len
+        self.n_labels = n_labels
+        self.n_labels_dec1 = n_labels_dec1
+        self.inv_label_idx_dec1 = {v: k for k, v in label_idx_dec1.items()}
+        self.label_idx_dec2 = label_idx_dec2
+        # for masking numbers
+        self.num_labels_dec2 = [v for k,v in self.label_idx_dec2.items() if re.findall("\d+", k)]
+        self.nonnum_labels_dec2 = list(set(self.label_idx_dec2.values()) - set(self.num_labels_dec2))
+        self.teacher_forcing = True
+        self.label_embeddings = nn.Embedding(self.n_labels, self.emb_dim,
+                                             padding_idx=label_padding_idx)  # embedding layer, initialized at random
+        # self.input_to_hidden = nn.Linear(self.final_emb_dim, 4 * hidden_dim)
+        #self.input_to_hidden = nn.Linear(2 * self.emb_dim, 4 * hidden_dim)
+        self.input_to_hidden = nn.Linear(self.emb_dim, 4 * hidden_dim)
+        self.hidden_to_hidden = nn.Linear(hidden_dim, 4 * hidden_dim)
+        self.hidden_out = nn.Linear(hidden_dim * 2, hidden_dim)
+        self.att = PointerAttention(hidden_dim, hidden_dim)
+        #self.out = nn.Linear(hidden_dim + hidden_dim + self.emb_dim + self.n_labels_dec1, self.n_labels)
+        self.out = nn.Linear(hidden_dim + hidden_dim + self.emb_dim, self.n_labels)
+
+        # Used for propagating .cuda() command
+        self.to(self.device)
+
+#    def __init__(self, *args, **kwargs):
+#        """
+#        Initiate Decoder
+#
+#        :param int embedding_dim: Number of embeddings in Pointer-Net
+#        :param int hidden_dim: Number of hidden units for the decoder's RNN
+#        """
+#        super().__init__(*args, **kwargs)
+#        self.input_to_hidden = nn.Linear(2 * self.emb_dim, 4 * self.hidden_dim)
+
+    def forward(self, sent_lengths, output_length, decoder_input, hidden, context, cur_labels, labels=None, label_embeddings=None, dec1_outputs=None):
+        """
+        Decoder - Forward-pass
+
+        :param Tensor decoder_input: First decoder's input
+        :param Tensor hidden: First decoder's hidden states
+        :param Tensor context: Encoder's outputs
+        :return: (Output probabilities, Pointers indices), last hidden state
+        """
+
+        # truncating the batch length if last batch has fewer elements
+        cur_batch_len = len(sent_lengths)
+        hidden = (hidden[0][:cur_batch_len, :], hidden[1][:cur_batch_len, :])
+
+        # converts data to packed sequences with data and batch size at every time step after sorting them per lengths
+        # embs = nn.utils.rnn.pack_padded_sequence(embs[:, sort], sent_lengths[sort], batch_first=False)
+        outputs = []
+        preds = []
+
+        is_inference = output_length is None
+        if is_inference:
+            # predict for max len so that we can use batches, prune later
+            output_length = self.max_output_len
+        # Recurrence loop
+        for i in range(output_length):
+            h_t, c_t, outs = self.step(i, decoder_input, hidden, context, labels, label_embeddings, dec1_outputs, cur_batch_len)
+            hidden = (h_t, c_t)
+            # Get maximum probabilities and indices
+            max_probs, indices = outs.max(1)
+            # Embed output labels for next input
+            if self.teacher_forcing and not is_inference:
+                decoder_input = self.label_embeddings(cur_labels[:, i])
+            else:
+                decoder_input = self.label_embeddings(indices)
+
+            outputs.append(outs.unsqueeze(0))
+            preds.append(indices.unsqueeze(1))
+
+        outputs = torch.cat(outputs).permute(1, 0, 2)  # (b * output_len * n_labels)
+        preds = torch.cat(preds, 1)  # (b * output_len)
+
+        return (outputs, preds), hidden
+
+    def step(self, i, x, hidden, context, labels, label_embeddings, dec1_outputs, cur_batch_len):
+        """
+        Recurrence step function
+
+        :param int i: time step
+        :param Tensor x: Input at time t
+        :param tuple(Tensor, Tensor) hidden: Hidden states at time t-1
+        :param Tensor label: label from dec1 at time t
+        :return: Hidden states at time t (h, c), Attention probabilities (Alpha)
+        """
+
+        # Regular LSTM
+        h, c = hidden
+
+        gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
+        #gates = self.input_to_hidden(torch.cat((x, label_embeddings(labels[:, i])), dim=1)) + self.hidden_to_hidden(h)
+        input, forget, cell, out = gates.chunk(4, 1)
+
+        input = F.sigmoid(input)
+        forget = F.sigmoid(forget)
+        cell = F.tanh(cell)
+        out = F.sigmoid(out)
+
+        c_t = (forget * c) + (input * cell)
+        h_t = out * F.tanh(c_t)
+
+        # Attention section
+        weighted, output_att = self.att(h_t, context, None)
+        hidden_t = F.tanh(self.hidden_out(torch.cat((weighted, h_t), 1)))
+
+        # hidden_t: b*hidden_dim
+        # weighted: b*hidden_dim
+        # x: b*final_emb_dim
+        #if labels[:, i]
+        output = self.out(torch.cat((hidden_t, weighted, x), dim=1))
+        #output = self.out(torch.cat((hidden_t, weighted, x, dec1_outputs[:,i,:]), dim=1))
+
+        # build a mask based on dec1 labels (types)
+        # if label is l or n, dec2 should produce a number, else not a number
+        to_num_mask = []  # b
+        for k in labels[:, i]:
+            to_num_mask.append(self.inv_label_idx_dec1[k.item()] in {"l", "n"})
+        mask1 = torch.zeros(cur_batch_len, self.n_labels).to(self.device)
+        for b, num in enumerate(to_num_mask):
+            if num:
+                mask1[b, self.num_labels_dec2] = 1.
+            else:
+                mask1[b, self.nonnum_labels_dec2] = 1.
+
+        output = output * mask1
+
+        return hidden_t, c_t, output
 
 
 class PointerNet(nn.Module):
@@ -738,7 +891,8 @@ class PointerNet(nn.Module):
                  feature_idx=None,
                  feat_size=None,
                  feat_padding_idx=None,
-                 feat_emb_dim=None):
+                 feat_emb_dim=None,
+                 cuda=0):
         """
         Initiate Pointer-Net
 
@@ -750,7 +904,7 @@ class PointerNet(nn.Module):
         """
         super().__init__()
         if torch.cuda.is_available():
-            self.device = torch.device('cuda:0')
+            self.device = torch.device(f'cuda:{cuda}')
         else:
             self.device = torch.device('cpu')
         self.n_lstm_layers = n_layers
@@ -776,9 +930,9 @@ class PointerNet(nn.Module):
 
         self.encoder = Encoder(n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
                                word_idx, pretrained_emb_path, feature_idx, feat_size, feat_padding_idx,
-                               feat_emb_dim)
+                               feat_emb_dim, cuda=cuda)
         self.decoder = PointerDecoder(hidden_dim, vocab_size, padding_idx, embedding_dim, word_idx, pretrained_emb_path,
-                                      output_len, feature_idx, feat_size, feat_padding_idx, feat_emb_dim)
+                                      output_len, feature_idx, feat_size, feat_padding_idx, feat_emb_dim, cuda=cuda)
         self.decoder_input0 = Parameter(torch.FloatTensor(self.final_emb_dim), requires_grad=False)
 
         # Initialize decoder_input0
@@ -948,7 +1102,8 @@ class EncoderDecoder(nn.Module):
                  feat_padding_idx=None,
                  feat_emb_dim=None,
                  feat_type=None,
-                 feat_onehot=None):
+                 feat_onehot=None,
+                 cuda=0):
         """
         Initiate EncoderDecoder
 
@@ -960,7 +1115,7 @@ class EncoderDecoder(nn.Module):
         """
         super().__init__()
         if torch.cuda.is_available():
-            self.device = torch.device('cuda:0')
+            self.device = torch.device(f'cuda:{cuda}')
         else:
             self.device = torch.device('cpu')
         self.n_lstm_layers = n_layers
@@ -994,10 +1149,10 @@ class EncoderDecoder(nn.Module):
         self.encoder = Encoder(n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
                                word_idx, pretrained_emb_path, bidir, bert_embs, feature_idx, feat_size,
                                feat_padding_idx,
-                               feat_emb_dim, feat_type, feat_onehot)
+                               feat_emb_dim, feat_type, feat_onehot, cuda=cuda)
         self.decoder = Decoder(hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, word_idx,
                                pretrained_emb_path,
-                               max_output_len, label_size)
+                               max_output_len, label_size, cuda=cuda)
         self.decoder_input0 = Parameter(torch.FloatTensor(self.emb_dim), requires_grad=False)
 
         # Initialize decoder_input0
@@ -1023,7 +1178,7 @@ class EncoderDecoder(nn.Module):
         else:
             decoder_hidden0 = (encoder_hidden[0][-1],
                                encoder_hidden[1][-1])
-        (outputs, labels), decoder_hidden = self.decoder(sentence, sent_lengths, output_length,
+        (outputs, labels), decoder_hidden = self.decoder(sent_lengths, output_length,
                                                          decoder_input0,
                                                          decoder_hidden0,
                                                          encoder_outputs,
@@ -1098,7 +1253,8 @@ class EncoderDecoder(nn.Module):
             _features = feature_encoder.get_feature_batches(corpus, self.batch_size, self.feat_type)
         else:
             _features = None
-        for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size, token_ids=bool(self.bert_embs))):
+        for idx, (cur_insts, cur_labels) in enumerate(
+                corpus_encoder.get_batches(corpus, self.batch_size, token_ids=bool(self.bert_embs))):
             cur_feats = _features.__next__() if _features is not None else None
             if _features is not None:
                 assert len(cur_feats) == len(cur_insts)
@@ -1163,4 +1319,383 @@ class EncoderDecoder(nn.Module):
 
     @classmethod
     def remove(cls, f_model='lstm_encdec.tar'):
+        os.remove("../out/" + f_model)
+
+class EncoderSplitDecoder(nn.Module):
+    def __init__(self,
+                 n_layers,
+                 hidden_dim,
+                 vocab_size,
+                 padding_idx,
+                 label_padding_idx,
+                 label_padding_idx2,
+                 embedding_dim,
+                 dropout,
+                 batch_size,
+                 word_idx,
+                 label_idx,
+                 label_idx2,
+                 pretrained_emb_path,
+                 max_output_len,
+                 label_size,
+                 label_size2,
+                 f_model,
+                 bidir=False,
+                 bert_embs=None,
+                 oracle_dec1=False,
+                 constrained_decoding=False,
+                 cuda=0,
+                 feature_idx=None,
+                 feat_size=None,
+                 feat_padding_idx=None,
+                 feat_emb_dim=None,
+                 feat_type=None,
+                 feat_onehot=None):
+        """
+        Initiate EncoderDecoder
+
+        :param int embedding_dim: Number of embbeding channels
+        :param int hidden_dim: Encoders hidden units
+        :param int lstm_layers: Number of layers for LSTMs
+        :param float dropout: Float between 0-1
+        :param bool bidir: Bidirectional
+        """
+        super().__init__()
+        self.cuda = cuda
+        if torch.cuda.is_available():
+            self.device = torch.device(f'cuda:{self.cuda}')
+        else:
+            self.device = torch.device('cpu')
+        self.n_lstm_layers = n_layers
+        self.hidden_dim = hidden_dim
+        self.vocab_size = vocab_size
+        self.padding_idx = padding_idx
+        self.label_padding_idx = label_padding_idx
+        self.label_padding_idx2 = label_padding_idx2
+        self.emb_dim = embedding_dim
+        self.dropout = dropout
+        self.batch_size = batch_size
+        self.word_idx = word_idx
+        self.label_idx = label_idx
+        self.label_idx2 = label_idx2
+        self.pretrained_emb_path = pretrained_emb_path
+        self.max_output_len = max_output_len
+        self.n_labels = label_size
+        self.n_labels2 = label_size2
+        self.f_model = f_model
+        # decoder output length
+        # if bidir:
+        #    raise NotImplementedError
+        self.bidir = bidir
+        self.bert_embs = bert_embs
+        self.oracle_dec1 = oracle_dec1
+        self.constrained_decoding = constrained_decoding
+        self.feature_idx = feature_idx
+        self.feat_size = feat_size
+        self.feat_padding_idx = feat_padding_idx
+        self.feat_emb_dim = feat_emb_dim
+        self.feat_type = feat_type
+        self.feat_onehot = feat_onehot
+        self.final_emb_dim = self.emb_dim + (
+            self.feat_emb_dim * len(self.feat_type) if self.feat_emb_dim is not None else 0)
+
+        self.encoder = Encoder(n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
+                               word_idx, pretrained_emb_path, bidir, bert_embs, feature_idx, feat_size,
+                               feat_padding_idx,
+                               feat_emb_dim, feat_type, feat_onehot, cuda=cuda)
+        self.decoder = Decoder(hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, word_idx,
+                               pretrained_emb_path,
+                               max_output_len, label_size, cuda=cuda)
+        # encoder for the decoded sequence, which is then passed to decoder 2
+        self.encoder2 = Encoder(n_layers, hidden_dim, label_size, label_padding_idx, embedding_dim, dropout, batch_size,
+                                word_idx, pretrained_emb_path=None, bidir=bidir, bert_embs=None, feature_idx=None, feat_size=None,
+                               feat_padding_idx=None, feat_emb_dim=None, feat_type=None, feat_onehot=None, cuda=cuda)
+        if constrained_decoding:
+            self.decoder2 = ConstrainedDecoder(hidden_dim, vocab_size, padding_idx, label_padding_idx2, embedding_dim, word_idx,
+                               pretrained_emb_path, max_output_len, label_size2, label_size, label_idx, label_idx2, cuda=cuda)
+        else:
+            self.decoder2 = Decoder(hidden_dim, vocab_size, padding_idx, label_padding_idx2, embedding_dim, word_idx,
+                                    pretrained_emb_path, max_output_len, label_size2, cuda=cuda)
+
+        self.decoder_input0 = Parameter(torch.FloatTensor(self.emb_dim), requires_grad=False)
+        self.decoder_input02 = Parameter(torch.FloatTensor(self.emb_dim), requires_grad=False)
+
+        # Initialize decoder_input0
+        nn.init.uniform(self.decoder_input0, -1, 1)
+        nn.init.uniform(self.decoder_input02, -1, 1)
+        self.to(self.device)
+
+    #    def forward(self, inputs):
+    def forward(self, sentence, features, sent_lengths, output_length=None, cur_labels=None, cur_labels2=None):
+        # input_length = inputs.size(1)
+        cur_batch_len = len(sent_lengths)
+        decoder_input0 = self.decoder_input0.unsqueeze(0).expand(cur_batch_len, -1)
+        decoder_input02 = self.decoder_input02.unsqueeze(0).expand(cur_batch_len, -1)
+
+        # inputs = inputs.view(batch_size * input_length, -1)
+        # embedded_inputs = self.embedding(inputs).view(batch_size, input_length, -1)
+
+        # ENCODER
+        enc_hidden0 = self.encoder.init_hidden()
+        # encoder_outputs, encoder_hidden = self.encoder(embedded_inputs, enc_hidden0)
+        encoder_outputs, encoder_hidden = self.encoder(sentence, features, sent_lengths, enc_hidden0)
+        encoder_outputs = encoder_outputs.permute(1, 0, 2)
+
+
+        # DECODER
+        if self.bidir:
+            decoder_hidden0 = (torch.cat(tuple(encoder_hidden[0][-2:]), dim=-1),  # final hidden state
+                               torch.cat(tuple(encoder_hidden[1][-2:]), dim=-1))
+        else:
+            decoder_hidden0 = (encoder_hidden[0][-1],  # final hidden state
+                               encoder_hidden[1][-1])  # final cell state
+        (outputs, labels), decoder_hidden = self.decoder(sent_lengths, output_length,
+                                                         decoder_input0,
+                                                         decoder_hidden0,
+                                                         encoder_outputs,
+                                                         cur_labels)
+
+        # ENCODING THE DECODED SEQUENCE
+        enc_hidden02 = self.encoder2.init_hidden()
+
+        # obtain lengths of decoded label seqs, to use with encoder2
+        if self.oracle_dec1:
+            label_lengths = self.get_label_lengths(cur_labels)
+            encoder_outputs2, encoder_hidden2 = self.encoder2(cur_labels.permute(1, 0), None, label_lengths, enc_hidden02)
+
+        else:
+            label_lengths = self.get_label_lengths(labels)
+            encoder_outputs2, encoder_hidden2 = self.encoder2(labels.permute(1, 0), None, label_lengths, enc_hidden02)
+
+        encoder_outputs2 = encoder_outputs2.permute(1, 0, 2)
+
+        # DECODER 2
+        if self.bidir:
+            decoder_hidden02 = (torch.cat(tuple(encoder_hidden2[0][-2:]), dim=-1),  # final hidden state
+                               torch.cat(tuple(encoder_hidden2[1][-2:]), dim=-1))
+        else:
+            decoder_hidden02 = (encoder_hidden2[0][-1],  # final hidden state
+                               encoder_hidden2[1][-1])  # final cell state
+
+        if self.constrained_decoding:
+            decoder_labels = labels
+            decoder_outputs = outputs
+        else:
+            decoder_labels = None
+            decoder_outputs = None
+        (outputs2, labels2), decoder_hidden2 = self.decoder2(label_lengths, output_length,
+                                                         decoder_input02,
+                                                         decoder_hidden02,
+                                                         encoder_outputs2,
+                                                         cur_labels2,
+                                                         decoder_labels,
+                                                         self.decoder.label_embeddings,
+                                                         decoder_outputs)
+
+        return outputs, labels, outputs2, labels2
+
+    def get_label_lengths(self, labels):
+        """
+        Obtain lengths of decoded label seqs, to use with encoder2
+        """
+        new_labels = []
+        for ls in labels.cpu().numpy():
+            new_ls = []
+            for l in ls:
+                if l == self.label_idx["</s>"]:
+                    break
+                new_ls.append(l)
+            if not new_ls:
+                new_ls.append(self.label_idx["<unk>"])
+            new_labels.append(new_ls)
+        label_lengths = [len(ls) for ls in new_labels]
+
+        return torch.tensor(label_lengths, dtype=torch.int).to(self.device)
+
+    def loss(self, fwd_out, target):
+        loss_fn = nn.CrossEntropyLoss(ignore_index=self.label_padding_idx)
+        return loss_fn(fwd_out, target)
+
+    def train_model(self, corpus, dev_corpus, corpus_encoder, feature_encoder, n_epochs, optimizer):
+
+        self.train()
+
+        optimizer = optimizer
+        best_acc = 0.
+
+        for i in range(n_epochs):
+            running_loss = 0.0
+
+            # shuffle the corpus
+            corpus.shuffle()
+            # potential external features
+            if feature_encoder is not None:
+                _features = feature_encoder.get_feature_batches(corpus, self.batch_size, self.feat_type)
+            else:
+                _features = None
+            # get train batch
+            for idx, (cur_insts, cur_labels, cur_labels2) in enumerate(
+                    corpus_encoder.get_batches(corpus, self.batch_size, token_ids=bool(self.bert_embs))):
+                cur_feats = _features.__next__() if _features is not None else None
+                if _features is not None:
+                    assert len(cur_feats) == len(cur_insts)
+                    cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
+                                                                                           len(self.feat_type))
+                cur_insts, cur_lengths, cur_labels, cur_label_lengths, cur_labels2, cur_label_lengths2 = corpus_encoder.batch_to_tensors(
+                    cur_insts, cur_labels, cur_labels2, self.device, padding_idx=0 if self.bert_embs else corpus_encoder.vocab.pad)
+                output_length = max(cur_label_lengths).item()
+                output_length2 = max(cur_label_lengths2).item()
+                assert output_length == output_length2
+                # forward pass
+                fwd_out, labels, fwd_out2, labels2 = self.forward(cur_insts, cur_feats, cur_lengths,
+                                               output_length=output_length,
+                                               cur_labels=cur_labels, cur_labels2=cur_labels2)
+                fwd_out = fwd_out.contiguous().view(-1, fwd_out.size()[-1])
+                fwd_out2 = fwd_out2.contiguous().view(-1, fwd_out2.size()[-1])
+                # loss calculation
+                loss = self.loss(fwd_out, cur_labels.view(-1).long())
+                loss2 = self.loss(fwd_out2, cur_labels2.view(-1).long())
+                #print(f"loss1: {loss}; loss2: {loss2}")
+                total_loss = loss + loss2
+
+                # backprop
+                optimizer.zero_grad()  # reset tensor gradients
+                total_loss.backward()  # compute gradients for network params w.r.t loss
+                optimizer.step()  # perform the gradient update step
+                running_loss += total_loss.item()
+            _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = self.predict(dev_corpus, feature_encoder, corpus_encoder)
+            # for accuracy calculation
+            y_true = [str(y) for y in _y_true]
+            y_pred = [str(y) for y in _y_pred]
+            y_pred1 = [str(y) for y in _y_pred1]
+            y_pred2 = [str(y) for y in _y_pred2]
+            y_true1 = [str(y) for y in _y_true1]
+            y_true2 = [str(y) for y in _y_true2]
+            self.train()  # set back the train mode
+            dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
+            dev_acc1 = accuracy_score(y_true=y_true1, y_pred=y_pred1)
+            dev_acc2 = accuracy_score(y_true=y_true2, y_pred=y_pred2)
+            print(f"acc dec1: {dev_acc1}, acc dec2: {dev_acc2}")
+            dev_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
+            if i == 0 or dev_acc > best_acc:
+                self.save(self.f_model)
+                best_acc = dev_acc
+            print('ep %d, loss: %.3f, dev_acc: %.3f, dev_f1: %.3f' % (i, running_loss, dev_acc, dev_f1))
+
+    def predict(self, corpus, feature_encoder, corpus_encoder):
+        def join_dec_labels(l1, l2):
+            """
+            :param l1: label list from decoder1
+            :param l2: label list from decoder2
+            :return: joined list of labels
+
+            Join labels from decoder1 and decoder2:
+            - substitute COPY labels in decoder2 with those from decoder1
+            - merge int labels from decoder2 with l/n labels from decoder1
+            """
+            l1_map = corpus_encoder.label_vocab.idx2word
+            l2_map = corpus_encoder.label_vocab2.idx2word
+            l_idx = corpus_encoder.label_vocab.word2idx["l"]
+            n_idx = corpus_encoder.label_vocab.word2idx["n"]
+
+            l = []
+            for m, x1 in enumerate(l1):
+                r = []
+                for n, ix1 in enumerate(x1):
+                    if ix1 in {l_idx, n_idx}:  # need a number here
+                        try:
+                            r.append(l1_map[ix1]+l2_map[l2[m,n]])
+                        except IndexError:
+                            r.append(l1_map[ix1]+"0")
+                    else:
+                        r.append(l1_map[ix1])
+                l.append(r)
+            return l
+
+
+        self.eval()
+        y_pred = list()
+        y_true = list()
+
+        # potential external features
+        if feature_encoder is not None:
+            _features = feature_encoder.get_feature_batches(corpus, self.batch_size, self.feat_type)
+        else:
+            _features = None
+        for idx, (cur_insts, cur_labels, cur_labels2) in enumerate(
+                corpus_encoder.get_batches(corpus, self.batch_size, token_ids=bool(self.bert_embs))):
+            cur_feats = _features.__next__() if _features is not None else None
+            if _features is not None:
+                assert len(cur_feats) == len(cur_insts)
+                cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
+                                                                                       len(self.feat_type))
+            cur_insts, cur_lengths, cur_labels, cur_label_lengths, cur_labels2, cur_label_lengths2 = corpus_encoder.batch_to_tensors(cur_insts,
+                                                                                                    cur_labels,
+                                                                                                    cur_labels2,
+                                                                                                    self.device,
+                                                                                                    padding_idx=0 if self.bert_embs else corpus_encoder.vocab.pad)
+
+            # forward pass
+            _, labels, _, labels2 = self.forward(cur_insts, cur_feats, cur_lengths, cur_labels=cur_labels, cur_labels2=cur_labels2)
+            y_true.extend(join_dec_labels(corpus_encoder.strip_until_eos(cur_labels.cpu().numpy()), cur_labels2.cpu().numpy()))
+            if self.oracle_dec1:
+                y_pred.extend(join_dec_labels(corpus_encoder.strip_until_eos(cur_labels.squeeze(1).cpu().numpy()), labels2.squeeze(1).cpu().numpy()))
+            else:
+                y_pred.extend(join_dec_labels(corpus_encoder.strip_until_eos(labels.squeeze(1).cpu().numpy()),
+                                              labels2.squeeze(1).cpu().numpy()))
+
+        return y_pred, y_true, (corpus_encoder.strip_until_eos(labels.cpu().numpy()), corpus_encoder.strip_until_eos(labels2.cpu().numpy()), corpus_encoder.strip_until_eos(cur_labels.cpu().numpy()), corpus_encoder.strip_until_eos(cur_labels2.cpu().numpy()))
+
+
+    def save(self, f_model='lstm_encsplitdec.tar', dir_model='../out/'):
+
+        net_params = {'n_layers': self.n_lstm_layers,
+                      'hidden_dim': self.hidden_dim,
+                      'vocab_size': self.vocab_size,
+                      'padding_idx': self.encoder.word_embeddings.padding_idx,
+                      'label_padding_idx': self.label_padding_idx,
+                      'label_padding_idx2': self.label_padding_idx2,
+                      'embedding_dim': self.emb_dim,
+                      'dropout': self.dropout,
+                      'batch_size': self.batch_size,
+                      'word_idx': self.word_idx,
+                      'label_idx': self.label_idx,
+                      'label_idx2': self.label_idx2,
+                      'pretrained_emb_path': self.pretrained_emb_path,
+                      'max_output_len': self.max_output_len,
+                      'label_size': self.n_labels,
+                      'label_size2': self.n_labels2,
+                      'f_model': self.f_model,
+                      'bidir': self.bidir,
+                      'bert_embs': self.bert_embs or None,
+                      'oracle_dec1': self.oracle_dec1,
+                      'constrained_decoding': self.constrained_decoding,
+                      'cuda': self.cuda,
+                      'feature_idx': self.feature_idx,
+                      'feat_size': self.feat_size,
+                      'feat_padding_idx': self.feat_padding_idx,
+                      'feat_emb_dim': self.feat_emb_dim,
+                      'feat_type': self.feat_type,
+                      'feat_onehot': self.feat_onehot
+                      }
+
+        # save model state
+        state = {
+            'net_params': net_params,
+            'state_dict': self.state_dict(),
+        }
+
+        TorchUtils.save_model(state, f_model, dir_model)
+
+    @classmethod
+    def load(cls, f_model='lstm_encsplitdec.tar', dir_model='../out/'):
+
+        state = TorchUtils.load_model(f_model, dir_model)
+        classifier = cls(**state['net_params'])
+        classifier.load_state_dict(state['state_dict'])
+
+        return classifier
+
+    @classmethod
+    def remove(cls, f_model='lstm_encsplitdec.tar'):
         os.remove("../out/" + f_model)

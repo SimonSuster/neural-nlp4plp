@@ -9,7 +9,7 @@ import numpy as np
 from corpus_util import Nlp4plpCorpus
 
 
-def create_splits(data_dir, data_dir_out):
+def create_splits(data_dir, data_dir_out, seed=1234):
     train_out_dir = data_dir_out + "/train/"
     dev_out_dir = data_dir_out + "/dev/"
     test_out_dir = data_dir_out + "/test/"
@@ -30,7 +30,7 @@ def create_splits(data_dir, data_dir_out):
     corp = Nlp4plpCorpus(data_dir)
     corp_len = len(corp.fs)
 
-    np.random.seed(1234)
+    np.random.seed(seed)
     np.random.shuffle(corp.fs)
     test_len = round(.1 * corp_len)
     val_len = test_len
