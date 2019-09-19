@@ -752,13 +752,15 @@ class ConstrainedDecoder(nn.Module):
         self.label_embeddings = nn.Embedding(self.n_labels, self.emb_dim,
                                              padding_idx=label_padding_idx)  # embedding layer, initialized at random
         # self.input_to_hidden = nn.Linear(self.final_emb_dim, 4 * hidden_dim)
-        #self.input_to_hidden = nn.Linear(2 * self.emb_dim, 4 * hidden_dim)
-        self.input_to_hidden = nn.Linear(self.emb_dim, 4 * hidden_dim)
+        # modification 1: dec1 feat for hidden
+        self.input_to_hidden = nn.Linear(2 * self.emb_dim, 4 * hidden_dim)
+        #self.input_to_hidden = nn.Linear(self.emb_dim, 4 * hidden_dim)
         self.hidden_to_hidden = nn.Linear(hidden_dim, 4 * hidden_dim)
         self.hidden_out = nn.Linear(hidden_dim * 2, hidden_dim)
         self.att = PointerAttention(hidden_dim, hidden_dim)
-        #self.out = nn.Linear(hidden_dim + hidden_dim + self.emb_dim + self.n_labels_dec1, self.n_labels)
-        self.out = nn.Linear(hidden_dim + hidden_dim + self.emb_dim, self.n_labels)
+        # modification 2: dec1 feat for output:
+        self.out = nn.Linear(hidden_dim + hidden_dim + self.emb_dim + self.n_labels_dec1, self.n_labels)
+        #self.out = nn.Linear(hidden_dim + hidden_dim + self.emb_dim, self.n_labels)
 
         # Used for propagating .cuda() command
         self.to(self.device)
@@ -830,8 +832,10 @@ class ConstrainedDecoder(nn.Module):
         # Regular LSTM
         h, c = hidden
 
-        gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
-        #gates = self.input_to_hidden(torch.cat((x, label_embeddings(labels[:, i])), dim=1)) + self.hidden_to_hidden(h)
+        #gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
+
+        # modification 1: dec1 feat for hidden
+        gates = self.input_to_hidden(torch.cat((x, label_embeddings(labels[:, i])), dim=1)) + self.hidden_to_hidden(h)
         input, forget, cell, out = gates.chunk(4, 1)
 
         input = F.sigmoid(input)
@@ -850,9 +854,11 @@ class ConstrainedDecoder(nn.Module):
         # weighted: b*hidden_dim
         # x: b*final_emb_dim
         #if labels[:, i]
-        output = self.out(torch.cat((hidden_t, weighted, x), dim=1))
-        #output = self.out(torch.cat((hidden_t, weighted, x, dec1_outputs[:,i,:]), dim=1))
+        #output = self.out(torch.cat((hidden_t, weighted, x), dim=1))
+        # modification 2: dec1 feat for output
+        output = self.out(torch.cat((hidden_t, weighted, x, dec1_outputs[:,i,:]), dim=1))
 
+        # modification 3: masking for numbers
         # build a mask based on dec1 labels (types)
         # if label is l or n, dec2 should produce a number, else not a number
         to_num_mask = []  # b
