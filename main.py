@@ -1,12 +1,12 @@
 import argparse
 import os
 import pickle
+import random
 from copy import deepcopy
 from datetime import datetime
-import random
 
 from pycocoevalcap.eval import COCOEvalCap
-from util import f1_score, FileUtils, load_json, save_json
+from util import f1_score, FileUtils
 
 random.seed(0)
 
@@ -110,7 +110,7 @@ def inspect_encdec(corp, label_vocab, _y_true, _y_pred):
 
     print("CORRECT:")
     for f, y_t, y_p in correct:
-        print("\n"+f)
+        print("\n" + f)
         print([label_vocab.idx2word[y] for y in y_t])
         print([label_vocab.idx2word[y] for y in y_p])
     print("INCORRECT:")
@@ -123,7 +123,7 @@ def inspect_encdec(corp, label_vocab, _y_true, _y_pred):
 def augment_train(train_corp, fac=10):
     fs_new, insts_new = [], []
     for f, inst in zip(train_corp.fs, train_corp.insts):
-        fs_new.extend([f]*fac)
+        fs_new.extend([f] * fac)
         for i in range(fac):
             inst_new = deepcopy(inst)
             np.random.shuffle(inst_new.statements)
@@ -145,7 +145,11 @@ def main():
     arg_parser.add_argument("--bert-tok-emb-path", type=str, default="",
                             help="path to bert embeddings for all toks in train/dev/test in json format")
     arg_parser.add_argument("--bidir", action="store_true")
-    arg_parser.add_argument("--constrained-decoding", action="store_true")
+    arg_parser.add_argument("--constrained-decoding", nargs='+',
+                            help="List of modifications to use:\n/"
+                                 "**mod1**: label_dec1 is embedded using label_embeddings, label_dec1 as input to LSTM_dec2;\n/"
+                                 "**mod2**: label_dec1 is represented as output distribution over all labels of dec1, label_dec1 as input to output layer of dec2\n/"
+                                 "**mod3**: masking for types (numbers) on output of dec2")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="",
                             help="path to folder from where data is loaded. Subfolder should be train/dev/test")
@@ -153,7 +157,8 @@ def main():
     arg_parser.add_argument("--dropout", type=float, default=0.0)
     arg_parser.add_argument("--embed-size", type=int, help="embedding dimension")
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
-    arg_parser.add_argument("--feat-onehot", action="store_true", help="use onehot feature encoding instead of embedded")
+    arg_parser.add_argument("--feat-onehot", action="store_true",
+                            help="use onehot feature encoding instead of embedded")
     arg_parser.add_argument('--feat-type', nargs='+', help="Which feature to use: pos | rels | num")
     arg_parser.add_argument("--feat_embed-size", type=int, default=10, help="embedding dimension for external features")
     arg_parser.add_argument("--hidden-dim", type=int, default=50, help="")
@@ -172,7 +177,8 @@ def main():
     arg_parser.add_argument("--n-bins", type=int, default=10, help="number of bins for discretization of answers")
     arg_parser.add_argument("--n-layers", type=int, default=1, help="number of layers for the RNN")
     arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
-    arg_parser.add_argument("--oracle-dec1", action="store_true", help="use gold seq instead of dec1 output to feed to dec2")
+    arg_parser.add_argument("--oracle-dec1", action="store_true",
+                            help="use gold seq instead of dec1 output to feed to dec2")
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
     arg_parser.add_argument("--print-correct", action="store_true")
@@ -246,7 +252,7 @@ def main():
                 pickle.dump(bert_embs, open(args.bert_tok_emb_path, "wb"))
                 print("finished collecting bert embeddings")
             else:
-                #bert_embs = load_json(args.bert_tok_emb_path+".json")
+                # bert_embs = load_json(args.bert_tok_emb_path+".json")
                 bert_embs = pickle.load(open(args.bert_tok_emb_path, "rb"))
     else:
         raise ValueError(f"Model should be '{model_names}'")
@@ -318,7 +324,8 @@ def main():
                           'cuda': args.cuda
                           }
             if args.feat_type:
-                feature_encoder = Nlp4plpPointerNetEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
+                feature_encoder = Nlp4plpPointerNetEncoder.feature_from_corpus(train_corp, dev_corp,
+                                                                               feat_type=args.feat_type)
                 net_params['feature_idx'] = feature_encoder.vocab.word2idx
                 net_params['feat_size'] = feature_encoder.vocab.size
                 net_params['feat_padding_idx'] = feature_encoder.vocab.pad
@@ -431,7 +438,8 @@ def main():
 
         # get predictions
         if args.model == "lstm-enc-split-dec":
-            _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(test_corp, feature_encoder, corpus_encoder)
+            _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(test_corp, feature_encoder,
+                                                                                            corpus_encoder)
             y_pred1 = [str(y) for y in _y_pred1]
             y_pred2 = [str(y) for y in _y_pred2]
             y_true1 = [str(y) for y in _y_true1]
@@ -464,7 +472,8 @@ def main():
             test_coco_eval.evaluate()
             test_coco = test_coco_eval.eval
             test_bleu4 = test_coco["Bleu_4"]
-            print('TEST SCORE: acc: %.3f, f1: %.3f, bleu4: %.3f, total: %i' % (test_acc, test_f1, test_bleu4, len(y_pred)))
+            print('TEST SCORE: acc: %.3f, f1: %.3f, bleu4: %.3f, total: %i' % (
+            test_acc, test_f1, test_bleu4, len(y_pred)))
             test_score_runs.append(test_acc)
             test_score_f1_runs.append(test_f1)
             test_score_bleu4_runs.append(test_bleu4)
@@ -478,13 +487,14 @@ def main():
         print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
 
     if args.inspect:
-        #inspect(test_corp, _y_true, _y_pred)
+        # inspect(test_corp, _y_true, _y_pred)
         # get dev predictions
         if args.model == "lstm-enc-split-dec":
-            _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(dev_corp, feature_encoder, corpus_encoder)
+            _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(dev_corp, feature_encoder,
+                                                                                            corpus_encoder)
         else:
             _y_pred, _y_true = classifier.predict(dev_corp, feature_encoder, corpus_encoder)
-        #inspect_encdec(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred)
+        # inspect_encdec(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred)
         if args.save_model:
             if args.label_type_dec == "full-pl":
                 save_preds_encdec_pl(dev_corp, _y_true, _y_pred, f_model, label_vocab=corpus_encoder.label_vocab)
@@ -495,5 +505,4 @@ def main():
 
 
 if __name__ == '__main__':
-
     main()

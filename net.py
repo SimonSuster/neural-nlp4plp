@@ -643,7 +643,7 @@ class Decoder(nn.Module):
         # Used for propagating .cuda() command
         self.to(self.device)
 
-    def forward(self, sent_lengths, output_length, decoder_input, hidden, context, cur_labels, labels=None, label_embeddings=None):
+    def forward(self, sent_lengths, output_length, decoder_input, hidden, context, cur_labels):
         """
         Decoder - Forward-pass
 
@@ -668,7 +668,7 @@ class Decoder(nn.Module):
             output_length = self.max_output_len
         # Recurrence loop
         for i in range(output_length):
-            h_t, c_t, outs = self.step(i, decoder_input, hidden, context, labels, label_embeddings)
+            h_t, c_t, outs = self.step(i, decoder_input, hidden, context)
             hidden = (h_t, c_t)
             # Get maximum probabilities and indices
             max_probs, indices = outs.max(1)
@@ -686,7 +686,7 @@ class Decoder(nn.Module):
 
         return (outputs, preds), hidden
 
-    def step(self, i, x, hidden, context, labels=None, label_embeddings=None):
+    def step(self, i, x, hidden, context):
         """
         Recurrence step function
 
@@ -724,12 +724,16 @@ class Decoder(nn.Module):
 
 class ConstrainedDecoder(nn.Module):
     def __init__(self, hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, word_idx,
-                 pretrained_emb_path, max_output_len, n_labels, n_labels_dec1, label_idx_dec1, label_idx_dec2, cuda=0):
+                 pretrained_emb_path, max_output_len, n_labels, n_labels_dec1, label_idx_dec1, label_idx_dec2, constrained_decoding, cuda=0):
         """
         Initiate Decoder
 
         :param int embedding_dim: Number of embeddings in Pointer-Net
         :param int hidden_dim: Number of hidden units for the decoder's RNN
+        :param list constrained_decoding: List of modifications (features and constraints) to use:
+               mod1: label_dec1 is embedded using label_embeddings, label_dec1 as input to LSTM_dec2
+               mod2: label_dec1 is represented as output distribution over all labels of dec1, label_dec1 as input to output layer of dec2
+               mod3: masking for types (numbers) on output of dec2
         """
         super().__init__()
         if torch.cuda.is_available():
@@ -748,19 +752,24 @@ class ConstrainedDecoder(nn.Module):
         # for masking numbers
         self.num_labels_dec2 = [v for k,v in self.label_idx_dec2.items() if re.findall("\d+", k)]
         self.nonnum_labels_dec2 = list(set(self.label_idx_dec2.values()) - set(self.num_labels_dec2))
+        self.constrained_decoding = constrained_decoding
         self.teacher_forcing = True
         self.label_embeddings = nn.Embedding(self.n_labels, self.emb_dim,
                                              padding_idx=label_padding_idx)  # embedding layer, initialized at random
-        # self.input_to_hidden = nn.Linear(self.final_emb_dim, 4 * hidden_dim)
-        # modification 1: dec1 feat for hidden
-        self.input_to_hidden = nn.Linear(2 * self.emb_dim, 4 * hidden_dim)
+        if "mod1" in self.constrained_decoding:
+            # modification 1: dec1 feat for hidden
+            self.input_to_hidden = nn.Linear(2 * self.emb_dim, 4 * hidden_dim)
+        else:
+            self.input_to_hidden = nn.Linear(self.final_emb_dim, 4 * hidden_dim)
         #self.input_to_hidden = nn.Linear(self.emb_dim, 4 * hidden_dim)
         self.hidden_to_hidden = nn.Linear(hidden_dim, 4 * hidden_dim)
         self.hidden_out = nn.Linear(hidden_dim * 2, hidden_dim)
         self.att = PointerAttention(hidden_dim, hidden_dim)
-        # modification 2: dec1 feat for output:
-        self.out = nn.Linear(hidden_dim + hidden_dim + self.emb_dim + self.n_labels_dec1, self.n_labels)
-        #self.out = nn.Linear(hidden_dim + hidden_dim + self.emb_dim, self.n_labels)
+        if "mod2" in self.constrained_decoding:
+            # modification 2: dec1 feat for output:
+            self.out = nn.Linear(hidden_dim + hidden_dim + self.emb_dim + self.n_labels_dec1, self.n_labels)
+        else:
+            self.out = nn.Linear(hidden_dim + hidden_dim + self.emb_dim, self.n_labels)
 
         # Used for propagating .cuda() command
         self.to(self.device)
@@ -832,10 +841,11 @@ class ConstrainedDecoder(nn.Module):
         # Regular LSTM
         h, c = hidden
 
-        #gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
-
         # modification 1: dec1 feat for hidden
-        gates = self.input_to_hidden(torch.cat((x, label_embeddings(labels[:, i])), dim=1)) + self.hidden_to_hidden(h)
+        if "mod1" in self.constrained_decoding:
+            gates = self.input_to_hidden(torch.cat((x, label_embeddings(labels[:, i])), dim=1)) + self.hidden_to_hidden(h)
+        else:
+            gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
         input, forget, cell, out = gates.chunk(4, 1)
 
         input = F.sigmoid(input)
@@ -853,12 +863,20 @@ class ConstrainedDecoder(nn.Module):
         # hidden_t: b*hidden_dim
         # weighted: b*hidden_dim
         # x: b*final_emb_dim
-        #if labels[:, i]
-        #output = self.out(torch.cat((hidden_t, weighted, x), dim=1))
-        # modification 2: dec1 feat for output
-        output = self.out(torch.cat((hidden_t, weighted, x, dec1_outputs[:,i,:]), dim=1))
 
-        # modification 3: masking for numbers
+        if "mod2" in self.constrained_decoding:
+            # modification 2: dec1 feat for output
+            output = self.out(torch.cat((hidden_t, weighted, x, dec1_outputs[:,i,:]), dim=1))
+        else:
+            output = self.out(torch.cat((hidden_t, weighted, x), dim=1))
+
+        if "mod3" in self.constrained_decoding:
+            # modification 3: masking for numbers
+            output = output * self.number_mask(i, labels, cur_batch_len)
+
+        return hidden_t, c_t, output
+
+    def number_mask(self, i, labels, cur_batch_len):
         # build a mask based on dec1 labels (types)
         # if label is l or n, dec2 should produce a number, else not a number
         to_num_mask = []  # b
@@ -871,9 +889,7 @@ class ConstrainedDecoder(nn.Module):
             else:
                 mask1[b, self.nonnum_labels_dec2] = 1.
 
-        output = output * mask1
-
-        return hidden_t, c_t, output
+        return mask1
 
 
 class PointerNet(nn.Module):
@@ -1418,7 +1434,7 @@ class EncoderSplitDecoder(nn.Module):
                                feat_padding_idx=None, feat_emb_dim=None, feat_type=None, feat_onehot=None, cuda=cuda)
         if constrained_decoding:
             self.decoder2 = ConstrainedDecoder(hidden_dim, vocab_size, padding_idx, label_padding_idx2, embedding_dim, word_idx,
-                               pretrained_emb_path, max_output_len, label_size2, label_size, label_idx, label_idx2, cuda=cuda)
+                               pretrained_emb_path, max_output_len, label_size2, label_size, label_idx, label_idx2, constrained_decoding, cuda=cuda)
         else:
             self.decoder2 = Decoder(hidden_dim, vocab_size, padding_idx, label_padding_idx2, embedding_dim, word_idx,
                                     pretrained_emb_path, max_output_len, label_size2, cuda=cuda)
@@ -1486,17 +1502,19 @@ class EncoderSplitDecoder(nn.Module):
         if self.constrained_decoding:
             decoder_labels = labels
             decoder_outputs = outputs
+            (outputs2, labels2), decoder_hidden2 = self.decoder2(label_lengths, output_length, decoder_input02,
+                                                                 decoder_hidden02,
+                                                                 encoder_outputs2,
+                                                                 cur_labels2,
+                                                                 decoder_labels,
+                                                                 self.decoder.label_embeddings,
+                                                                 decoder_outputs)
+
         else:
-            decoder_labels = None
-            decoder_outputs = None
-        (outputs2, labels2), decoder_hidden2 = self.decoder2(label_lengths, output_length,
-                                                         decoder_input02,
-                                                         decoder_hidden02,
-                                                         encoder_outputs2,
-                                                         cur_labels2,
-                                                         decoder_labels,
-                                                         self.decoder.label_embeddings,
-                                                         decoder_outputs)
+            (outputs2, labels2), decoder_hidden2 = self.decoder2(label_lengths, output_length, decoder_input02,
+                                                                 decoder_hidden02,
+                                                                 encoder_outputs2,
+                                                                 cur_labels2)
 
         return outputs, labels, outputs2, labels2
 
