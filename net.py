@@ -1366,6 +1366,7 @@ class EncoderSplitDecoder(nn.Module):
                  bert_embs=None,
                  oracle_dec1=False,
                  constrained_decoding=False,
+                 label_type_dec="full-pl-split",
                  cuda=0,
                  feature_idx=None,
                  feat_size=None,
@@ -1412,6 +1413,7 @@ class EncoderSplitDecoder(nn.Module):
         self.bert_embs = bert_embs
         self.oracle_dec1 = oracle_dec1
         self.constrained_decoding = constrained_decoding
+        self.label_type_dec = label_type_dec
         self.feature_idx = feature_idx
         self.feat_size = feat_size
         self.feat_padding_idx = feat_padding_idx
@@ -1448,7 +1450,7 @@ class EncoderSplitDecoder(nn.Module):
         self.to(self.device)
 
     #    def forward(self, inputs):
-    def forward(self, sentence, features, sent_lengths, output_length=None, cur_labels=None, cur_labels2=None):
+    def forward(self, sentence, features, sent_lengths, output_length=None, output_length2=None, cur_labels=None, cur_labels2=None):
         # input_length = inputs.size(1)
         cur_batch_len = len(sent_lengths)
         decoder_input0 = self.decoder_input0.unsqueeze(0).expand(cur_batch_len, -1)
@@ -1488,7 +1490,6 @@ class EncoderSplitDecoder(nn.Module):
         else:
             label_lengths = self.get_label_lengths(labels)
             encoder_outputs2, encoder_hidden2 = self.encoder2(labels.permute(1, 0), None, label_lengths, enc_hidden02)
-
         encoder_outputs2 = encoder_outputs2.permute(1, 0, 2)
 
         # DECODER 2
@@ -1498,11 +1499,12 @@ class EncoderSplitDecoder(nn.Module):
         else:
             decoder_hidden02 = (encoder_hidden2[0][-1],  # final hidden state
                                encoder_hidden2[1][-1])  # final cell state
+        label_lengths = self.get_label_lengths(labels)
 
         if self.constrained_decoding:
             decoder_labels = labels
             decoder_outputs = outputs
-            (outputs2, labels2), decoder_hidden2 = self.decoder2(label_lengths, output_length, decoder_input02,
+            (outputs2, labels2), decoder_hidden2 = self.decoder2(label_lengths, output_length2, decoder_input02,
                                                                  decoder_hidden02,
                                                                  encoder_outputs2,
                                                                  cur_labels2,
@@ -1511,9 +1513,16 @@ class EncoderSplitDecoder(nn.Module):
                                                                  decoder_outputs)
 
         else:
-            (outputs2, labels2), decoder_hidden2 = self.decoder2(label_lengths, output_length, decoder_input02,
-                                                                 decoder_hidden02,
-                                                                 encoder_outputs2,
+            if self.label_type_dec == "full-pl-split-stat-dyn":
+                dec_hidden0 = decoder_hidden0
+                enc_outputs = encoder_outputs
+            else:
+                dec_hidden0 = decoder_hidden02
+                enc_outputs = encoder_outputs2
+
+            (outputs2, labels2), decoder_hidden2 = self.decoder2(label_lengths, output_length2, decoder_input02,
+                                                                 dec_hidden0,
+                                                                 enc_outputs,
                                                                  cur_labels2)
 
         return outputs, labels, outputs2, labels2
@@ -1569,16 +1578,18 @@ class EncoderSplitDecoder(nn.Module):
                     cur_insts, cur_labels, cur_labels2, self.device, padding_idx=0 if self.bert_embs else corpus_encoder.vocab.pad)
                 output_length = max(cur_label_lengths).item()
                 output_length2 = max(cur_label_lengths2).item()
-                assert output_length == output_length2
+                if self.oracle_dec1:
+                    assert output_length == output_length2
                 # forward pass
                 fwd_out, labels, fwd_out2, labels2 = self.forward(cur_insts, cur_feats, cur_lengths,
-                                               output_length=output_length,
+                                               output_length=output_length, output_length2=output_length2,
                                                cur_labels=cur_labels, cur_labels2=cur_labels2)
                 fwd_out = fwd_out.contiguous().view(-1, fwd_out.size()[-1])
                 fwd_out2 = fwd_out2.contiguous().view(-1, fwd_out2.size()[-1])
                 # loss calculation
                 loss = self.loss(fwd_out, cur_labels.view(-1).long())
                 loss2 = self.loss(fwd_out2, cur_labels2.view(-1).long())
+
                 #print(f"loss1: {loss}; loss2: {loss2}")
                 total_loss = loss + loss2
 
@@ -1599,18 +1610,18 @@ class EncoderSplitDecoder(nn.Module):
             dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
             dev_acc1 = accuracy_score(y_true=y_true1, y_pred=y_pred1)
             dev_acc2 = accuracy_score(y_true=y_true2, y_pred=y_pred2)
-            print(f"acc dec1: {dev_acc1}, acc dec2: {dev_acc2}")
+            #print(f"acc dec1: {dev_acc1}, acc dec2: {dev_acc2}")
             dev_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
             if i == 0 or dev_acc > best_acc:
                 self.save(self.f_model)
-                best_acc = dev_acc
-            print('ep %d, loss: %.3f, dev_acc: %.3f, dev_f1: %.3f' % (i, running_loss, dev_acc, dev_f1))
+            print('ep %d, loss: %.3f, dev_acc1: %.3f, dev_acc2: %.3f. dev_acc: %.3f, dev_f1: %.3f' % (i, running_loss, dev_acc1, dev_acc2, dev_acc, dev_f1))
 
     def predict(self, corpus, feature_encoder, corpus_encoder):
-        def join_dec_labels(l1, l2):
+        def join_dec_labels(l1, l2, exclude_type_str=False, compact=False):
             """
             :param l1: label list from decoder1
             :param l2: label list from decoder2
+            :param exclude_type_str: when pasting don't include type str from dec1 as dec2 already has it
             :return: joined list of labels
 
             Join labels from decoder1 and decoder2:
@@ -1619,16 +1630,31 @@ class EncoderSplitDecoder(nn.Module):
             """
             l1_map = corpus_encoder.label_vocab.idx2word
             l2_map = corpus_encoder.label_vocab2.idx2word
+            #if exclude_type_str:
+            #    ln_idxs = set()
+            #    for k,v in corpus_encoder.label_vocab.word2idx.items():
+            #        h = re.findall("^l|n\d+$", k)
+            #        if h:
+            #            ln_idxs.add(h.pop())
+            #else:
+            #    l_idx = corpus_encoder.label_vocab.word2idx["l"]
+            #    n_idx = corpus_encoder.label_vocab.word2idx["n"]
+            #    ln_idxs = {l_idx, n_idx}
             l_idx = corpus_encoder.label_vocab.word2idx["l"]
             n_idx = corpus_encoder.label_vocab.word2idx["n"]
+            ln_idxs = {l_idx, n_idx}
 
             l = []
             for m, x1 in enumerate(l1):
                 r = []
+                ix1_cnt = 0
                 for n, ix1 in enumerate(x1):
-                    if ix1 in {l_idx, n_idx}:  # need a number here
+                    if ix1 in ln_idxs:  # need a number here
+                        ix1_cnt += 1
+                        ix1_m = "" if exclude_type_str else l1_map[ix1]
                         try:
-                            r.append(l1_map[ix1]+l2_map[l2[m,n]])
+                            l2_str = l2_map[l2[m, ix1_cnt]] if compact else l2_map[l2[m, n]]
+                            r.append(ix1_m+l2_str)
                         except IndexError:
                             r.append(l1_map[ix1]+"0")
                     else:
@@ -1636,6 +1662,22 @@ class EncoderSplitDecoder(nn.Module):
                 l.append(r)
             return l
 
+        def join_stat_dyn_labels(l1, l2):
+            """
+            :param l1: label list from decoder1
+            :param l2: label list from decoder2
+            :return: joined list of labels
+
+            Join labels from decoder1 and decoder2:
+            -
+            -
+            """
+            l1_map = corpus_encoder.label_vocab.idx2word
+            l2_map = corpus_encoder.label_vocab2.idx2word
+            l = []
+            for _l1, _l2 in zip(l1, l2):
+                l.append([l1_map[i] for i in _l1] + [l2_map[i] for i in _l2])
+            return l
 
         self.eval()
         y_pred = list()
@@ -1661,13 +1703,34 @@ class EncoderSplitDecoder(nn.Module):
 
             # forward pass
             _, labels, _, labels2 = self.forward(cur_insts, cur_feats, cur_lengths, cur_labels=cur_labels, cur_labels2=cur_labels2)
-            y_true.extend(join_dec_labels(corpus_encoder.strip_until_eos(cur_labels.cpu().numpy()), cur_labels2.cpu().numpy()))
+
+            if self.label_type_dec == "full-pl-split":
+                y_true.extend(join_dec_labels(corpus_encoder.strip_until_eos(cur_labels.cpu().numpy()), cur_labels2.cpu().numpy()))
+            elif self.label_type_dec == "full-pl-split-plc":
+                y_true.extend(join_dec_labels(corpus_encoder.strip_until_eos(cur_labels.cpu().numpy()),
+                                              cur_labels2.cpu().numpy(), exclude_type_str=True, compact=True))
+            elif self.label_type_dec == "full-pl-split-stat-dyn":
+                y_true.extend(join_stat_dyn_labels(corpus_encoder.strip_until_eos(cur_labels.cpu().numpy()),
+                                                   corpus_encoder.strip_until_eos(cur_labels2.cpu().numpy())))
+            else:
+                raise ValueError
+
             if self.oracle_dec1:
+                if self.label_type_dec == "full-pl-split-stat-dyn":
+                    raise NotImplementedError
                 y_pred.extend(join_dec_labels(corpus_encoder.strip_until_eos(cur_labels.squeeze(1).cpu().numpy()), labels2.squeeze(1).cpu().numpy()))
             else:
-                y_pred.extend(join_dec_labels(corpus_encoder.strip_until_eos(labels.squeeze(1).cpu().numpy()),
-                                              labels2.squeeze(1).cpu().numpy()))
-
+                if self.label_type_dec == "full-pl-split":
+                    y_pred.extend(join_dec_labels(corpus_encoder.strip_until_eos(labels.squeeze(1).cpu().numpy()),
+                                                  labels2.squeeze(1).cpu().numpy()))
+                elif self.label_type_dec == "full-pl-split-plc":
+                    y_pred.extend(join_dec_labels(corpus_encoder.strip_until_eos(labels.squeeze(1).cpu().numpy()),
+                                                  labels2.squeeze(1).cpu().numpy(), exclude_type_str=True, compact=True))
+                elif self.label_type_dec == "full-pl-split-stat-dyn":
+                        y_pred.extend(join_stat_dyn_labels(corpus_encoder.strip_until_eos(labels.squeeze(1).cpu().numpy()),
+                                                           corpus_encoder.strip_until_eos(labels2.squeeze(1).cpu().numpy())))
+                else:
+                    raise ValueError
         return y_pred, y_true, (corpus_encoder.strip_until_eos(labels.cpu().numpy()), corpus_encoder.strip_until_eos(labels2.cpu().numpy()), corpus_encoder.strip_until_eos(cur_labels.cpu().numpy()), corpus_encoder.strip_until_eos(cur_labels2.cpu().numpy()))
 
 
@@ -1694,6 +1757,7 @@ class EncoderSplitDecoder(nn.Module):
                       'bert_embs': self.bert_embs or None,
                       'oracle_dec1': self.oracle_dec1,
                       'constrained_decoding': self.constrained_decoding,
+                      'label_type_dec': self.label_type_dec,
                       'cuda': self.cuda,
                       'feature_idx': self.feature_idx,
                       'feat_size': self.feat_size,

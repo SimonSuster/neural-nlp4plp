@@ -3,7 +3,7 @@ import random
 from collections import defaultdict
 
 from nlp4plp.evaluate.allpredicates import get_all_predicates, get_full_pl, get_all_predicates_arguments, \
-    get_full_pl_no_arg_id, get_full_pl_id
+    get_full_pl_no_arg_id, get_full_pl_id, get_full_pl_id_plc
 from nlp4plp.evaluate.eval import parse_file
 
 random.seed(0)
@@ -29,7 +29,8 @@ from util import FileUtils, get_file_list, Nlp4plpData, load_json
 
 # beginning of seq, end of seq, beg of line, end of line, unknown, padding symbol
 BOS, EOS, BOL, EOL, UNK, PAD = '<s>', '</s>', '<bol>', '</bol>', '<unk>', '<pad>'
-
+STAT = {"property", "group", "size", "given"}
+DYN = {"take", "take_wr", "union", "observe", "probability"}
 
 def to_lower(s, low):
     return s.lower() if low else s
@@ -198,6 +199,10 @@ class Nlp4plpInst:
                     num.append(f"num:{num_tag}")
             except KeyError:
                 continue
+        #for c, i in enumerate(txt):
+        #    if i == "third":
+        #        if txt[c-1] == "one":
+        #            print()
         self.txt = txt
         self.pos = pos
         self.rels = rels
@@ -661,12 +666,36 @@ class Nlp4plpCorpus:
     def get_full_pl_label(self, inst):
         """
         Includes predicates, arguments, parentheses and dot
-       """
+        """
         problog_program = parse_file(inst.f)
         preds = get_full_pl(problog_program)
         labels = [p for ps in preds for p in ps]
 
         return labels  # [predicate1, predicate2, ...]
+
+    def get_full_pl_stat_dyn_label(self, inst):
+        """
+        Includes predicates, arguments, parentheses and dot
+        :param str selection: stat | dyn. If None all statements will be used as labels.
+                                          If stat, only static, if dyn, only dynamic.
+        """
+        problog_program = parse_file(inst.f)
+        preds = get_full_pl(problog_program)
+        preds1, preds2 = [], []
+        for ps in preds:
+            start = ps[0]
+            p_name = re.findall("(.*?)\(", start).pop()
+            if p_name in STAT:
+                preds1.append(ps)
+            elif p_name in DYN:
+                preds2.append(ps)
+            else:
+                raise ValueError
+
+        labels1 = [p for ps in preds1 for p in ps]
+        labels2 = [p for ps in preds2 for p in ps]
+
+        return labels1, labels2  # [predicate1, predicate2, ...]
 
     def get_full_pl_no_arg_id_label(self, inst):
         """
@@ -686,7 +715,27 @@ class Nlp4plpCorpus:
         preds = get_full_pl_id(problog_program)
         labels = [p for ps in preds for p in ps]
 
-        return labels  # [predicate1, predicate2, ...]
+        return labels
+
+    def get_full_pl_id_plc_label(self, inst):
+        """
+        Instead of args ents we have ids (integers), instead of all other elements we have COPY
+        """
+        problog_program = parse_file(inst.f)
+        preds = get_full_pl_id_plc(problog_program)
+        labels = [p for ps in preds for p in ps]
+
+        return labels
+
+    def get_compact_pl_id_plc_label(self, inst):
+        """
+        Instead of args ents we have ids (integers), instead of all other elements we have COPY
+        """
+        problog_program = parse_file(inst.f)
+        preds = get_full_pl_id_plc(problog_program, compact=True)
+        labels = [p for ps in preds for p in ps]
+
+        return labels
 
     def get_pointer_labels(self, label_type):
         if label_type == "group":
@@ -732,17 +781,30 @@ class Nlp4plpCorpus:
         #    get_label = self.get_full_pl_id_label
         elif label_type == "full-pl-split":
             get_label = (self.get_full_pl_no_arg_id_label, self.get_full_pl_id_label)
+        elif label_type == "full-pl-split-plc":
+            #get_label = (self.get_full_pl_no_arg_id_label, self.get_full_pl_id_plc_label)
+            get_label = (self.get_full_pl_no_arg_id_label, self.get_compact_pl_id_plc_label)
+        elif label_type == "full-pl-split-stat-dyn":
+            get_label = self.get_full_pl_stat_dyn_label
         else:
             raise ValueError("invalid label_type specified")
 
         for inst in self.insts:
-            if isinstance(get_label, tuple):
+            if label_type == "full-pl-split-stat-dyn":
+                inst.label, inst.label2 = get_label(inst)
+                if max_output_len is not None:
+                    if len(inst.label) > max_output_len:
+                        inst.label = None
+                    if len(inst.label2) > max_output_len:
+                        inst.label2 = None
+            elif isinstance(get_label, tuple):
                 inst.label = get_label[0](inst)
-                if max_output_len is not None and len(inst.label) > max_output_len:
-                    inst.label = None
                 inst.label2 = get_label[1](inst)
-                if max_output_len is not None and len(inst.label2) > max_output_len:
-                    inst.label2 = None
+                if max_output_len is not None:
+                    if len(inst.label) > max_output_len:
+                        inst.label = None
+                    if len(inst.label2) > max_output_len:
+                        inst.label2 = None
             else:
                 inst.label = get_label(inst)
                 if max_output_len is not None and len(inst.label) > max_output_len:

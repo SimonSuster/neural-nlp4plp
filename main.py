@@ -167,8 +167,8 @@ def main():
     arg_parser.add_argument("--label-type", type=str,
                             help="group | take | take_wr | both_take | take3 | take_declen2 | take_wr_declen2 | take_declen3 | take_wr_declen3 | both_take_declen3. To use with PointerNet.")
     arg_parser.add_argument("--label-type-dec", type=str,
-                            help="predicates | predicates-all | predicates-arguments-all | full-pl | full-pl-no-arg-id | full-pl-split. To use with EncDec.")
-    arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.01")
+                            help="predicates | predicates-all | predicates-arguments-all | full-pl | full-pl-no-arg-id | full-pl-split | full-pl-split-plc | full-pl-split-stat-dyn. To use with EncDec.")
+    arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.001")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
     arg_parser.add_argument("--max-output-len", type=int, default=500,
                             help="Maximum decoding length for EncDec models at prediction time.")
@@ -400,6 +400,7 @@ def main():
                           'bert_embs': bert_embs if args.bert else None,
                           'oracle_dec1': args.oracle_dec1,
                           'constrained_decoding': args.constrained_decoding,
+                          'label_type_dec': args.label_type_dec,
                           'cuda': args.cuda
                           }
             if args.feat_type:
@@ -498,7 +499,7 @@ def main():
         if args.save_model:
             if args.label_type_dec == "full-pl":
                 save_preds_encdec_pl(dev_corp, _y_true, _y_pred, f_model, label_vocab=corpus_encoder.label_vocab)
-            elif args.label_type_dec == "full-pl-split":
+            elif args.label_type_dec in {"full-pl-split", "full-pl-split-stat-dyn"}:
                 save_preds_encdec_pl(dev_corp, _y_true, _y_pred, f_model)
     if not args.save_model:
         classifier.remove(f_model=classifier.f_model)
