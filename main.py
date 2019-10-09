@@ -56,14 +56,19 @@ def save_preds_encdec(corp, label_vocab, _y_true, _y_pred, f_name, dir_out="../o
 
 
 def save_preds_encdec_pl(corp, _y_true, _y_pred, log_name, label_vocab=None, dir_out="../out/"):
-    def final_repl(n):
+    def final_repl(n, num2n_map):
         k = []
         for i in n:
             if i.startswith(")"):
                 k.append(")")
             else:
+                if num2n_map is not None:
+                    inv_num2n_map = {v: k for k, v in num2n_map.items()}
+                    if i in inv_num2n_map:
+                        k.append(inv_num2n_map[i])
+                        continue
                 k.append(i)
-        new_k = " ".join(k).replace(" ", "").replace(".", ".\n")
+        new_k = " ".join(k).replace(" ", "").replace(").", ").\n")
         return new_k
 
     """ as a prolog program """
@@ -84,8 +89,8 @@ def save_preds_encdec_pl(corp, _y_true, _y_pred, log_name, label_vocab=None, dir
             else:
                 t = y_t
                 p = y_p
-            t = final_repl(t)
-            p = final_repl(p)
+            t = final_repl(t, corp.insts[c].num2n_map)
+            p = final_repl(p, corp.insts[c].num2n_map)
             f_out_t.write(t)
             f_out_p.write(p)
 
@@ -150,6 +155,7 @@ def main():
                                  "**mod1**: label_dec1 is embedded using label_embeddings, label_dec1 as input to LSTM_dec2;\n/"
                                  "**mod2**: label_dec1 is represented as output distribution over all labels of dec1, label_dec1 as input to output layer of dec2\n/"
                                  "**mod3**: masking for types (numbers) on output of dec2")
+    arg_parser.add_argument("--convert-consts", default=1, type=int, help="whether convert.py converts num to symbs in statements as well. If not, number are still converted, but based on a map from problem files.")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="",
                             help="path to folder from where data is loaded. Subfolder should be train/dev/test")
@@ -216,12 +222,12 @@ def main():
         dev_corp.remove_none_labels()
         test_corp.remove_none_labels()
     elif args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
-        train_corp = Nlp4plpCorpus(args.data_dir + "train")
+        train_corp = Nlp4plpCorpus(args.data_dir + "train", args.convert_consts)
         if args.augment_train:
             train_corp = augment_train(train_corp)
         print(f"Size of train: {len(train_corp.insts)}")
-        dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
-        test_corp = Nlp4plpCorpus(args.data_dir + "test")
+        dev_corp = Nlp4plpCorpus(args.data_dir + "dev", args.convert_consts)
+        test_corp = Nlp4plpCorpus(args.data_dir + "test", args.convert_consts)
         if args.debug:
             train_corp.fs = train_corp.fs[:10]
             train_corp.insts = train_corp.insts[:10]
@@ -338,6 +344,7 @@ def main():
             corpus_encoder = Nlp4plpEncDecEncoder.from_corpus(train_corp, dev_corp)
             # print(corpus_encoder.label_vocab.to_dict()["word2idx"])
             print(f"n labels: {len(corpus_encoder.label_vocab)}")
+            print(corpus_encoder.label_vocab.word2idx)
             # max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
             f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
             print(f"f_model: {f_model}")

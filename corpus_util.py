@@ -117,9 +117,9 @@ def encode_labels(fit_labels, transform_labels):
 class Nlp4plpInst:
     def __init__(self, ls, low=True, tokenizer=word_tokenize):
         self.f = None
-        self.id, self.ans, self.ans_raw, self.statements = self.read(ls, low, tokenizer)
+        self.id, self.ans, self.ans_raw, self.txt, self.statements, self.num2n_map = self.read(ls, low, tokenizer)
         self.words_anno = None
-        self.txt = None
+        #self.txt = None
         self.pos = None
         self.f_anno = None
 
@@ -130,7 +130,7 @@ class Nlp4plpInst:
             problem_id = problem_l[1:problem_l.find("\t")].strip()
         else:
             problem_id = problem_l[1:problem_l.find(":")].strip()
-        # problem_txt_lst = tokenize(problem_l[problem_l.find(":") + 1:problem_l.find("##")].strip())
+        problem_txt_lst = tokenize(problem_l[problem_l.find(":") + 1: problem_l.find("##")].strip())
         problem_ans_raw = problem_l[problem_l.find("##") + len("## Solution:"):].strip()
         problem_ans_raw = problem_ans_raw.replace("^", "**")
         try:
@@ -141,10 +141,16 @@ class Nlp4plpInst:
                 problem_ans_raw,
                 problem_id))
             problem_ans = None
-        statements = [to_lower(l.strip(), low) for l in ls[1:] if l.strip() and not l.strip().startswith("%")]
+        if ls[1].startswith("%"):
+            num2n_map = eval(ls[1].split(" ", 1)[1])
+        else:
+            num2n_map = None
+
+        rest_ls = ls[1:] if num2n_map is None else ls[2:]
+        statements = [to_lower(l.strip(), low) for l in rest_ls if l.strip() and not l.strip().startswith("%")]
 
         # return problem_id, problem_txt_lst, problem_ans, problem_ans_raw, statements
-        return problem_id, problem_ans, problem_ans_raw, statements
+        return problem_id, problem_ans, problem_ans_raw, problem_txt_lst, statements, num2n_map
 
     def add_txt_anno(self, f):
         """
@@ -173,7 +179,7 @@ class Nlp4plpInst:
         except KeyError:
             dep_l = []
         dep_d = dep_list_to_dict(dep_l)
-        txt = []
+        #txt = []
         pos = []
         rels = []
         num = []
@@ -181,7 +187,7 @@ class Nlp4plpInst:
             try:
                 s = self.words_anno[str(i + 1)]
                 for j in range(len(s)):
-                    txt.append(s[str(j + 1)]["text"].lower())
+                    #txt.append(s[str(j + 1)]["text"].lower())
                     pos_tag = s[str(j + 1)]["nlp_pos"]
                     pos.append(f"pos:{pos_tag}")
                     dep_id = f"{i + 1}-{j + 1}"
@@ -203,17 +209,31 @@ class Nlp4plpInst:
         #    if i == "third":
         #        if txt[c-1] == "one":
         #            print()
-        self.txt = txt
+        diff_len = len(self.txt) - len(pos)
+        if diff_len > 0:
+            pos.extend(diff_len*["pos:"])
         self.pos = pos
+        diff_len = len(self.txt) - len(rels)
+        if diff_len > 0:
+            rels.extend(diff_len * ["rel:"])
         self.rels = rels
+        diff_len = len(self.txt) - len(num)
+        if diff_len > 0:
+            num.extend(diff_len * ["num:"])
         self.num = num
 
 
 class Nlp4plpCorpus:
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, convert_consts):
         self.data_dir = data_dir
         self.fs, self.insts = self.get_insts()
         self.fitted_discretizer = None
+
+        # if True, will convert numbers in statements based on convert.py, but no map will exist for the conversion
+        # if False, will leave the numbers intact in statements. These will be converted based on the map from the
+        # problem file, so that when the network outputs symols for numbers, we can convert back to numbers
+        # for execution accuracy
+        self.convert_consts = convert_consts
 
     def get_insts(self):
         dir_fs = get_file_list(self.data_dir, [".pl"])
@@ -229,6 +249,7 @@ class Nlp4plpCorpus:
                 inst_id = inst_id.split()[0]
             author = {"m": "monica", "l": "liselot", "h": "hannah"}[inst_au]
             dir = "/".join(self.data_dir.split("/")[:-2]) + f"/data/examples/{author}/"
+            #dir = f"/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/data/examples/{author}/"
             fn = f"{inst_id:0>10}.json"
             f_anno = dir + fn
             try:
@@ -668,8 +689,18 @@ class Nlp4plpCorpus:
         Includes predicates, arguments, parentheses and dot
         """
         problog_program = parse_file(inst.f)
-        preds = get_full_pl(problog_program)
-        labels = [p for ps in preds for p in ps]
+        preds = get_full_pl(problog_program, convert_consts=self.convert_consts)
+        labels = []
+        for ps in preds:
+            for p in ps:
+                if self.convert_consts:
+                    labels.append(p)
+                else:
+                    try:
+                        mapped_p = inst.num2n_map[p]
+                        labels.append(mapped_p)
+                    except (KeyError, TypeError):
+                        labels.append(p)
 
         return labels  # [predicate1, predicate2, ...]
 
