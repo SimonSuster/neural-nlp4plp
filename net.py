@@ -646,7 +646,7 @@ class Decoder(nn.Module):
         # Used for propagating .cuda() command
         self.to(self.device)
 
-    def forward(self, sent_lengths, output_length, decoder_input, hidden, context, cur_labels, cur_max_nsymbs):
+    def forward(self, sent_lengths, output_length, decoder_input, hidden, context, cur_labels):
         """
         Decoder - Forward-pass
 
