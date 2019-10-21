@@ -110,9 +110,11 @@ def solver_report(f):
         while l0:
             assert l0.startswith("===")
             id = l0.split(" ")[2]
-
+            if id == "m435":
+                print()
             l1 = fh.readline()
-            assert l1.startswith("Solution")
+            if not l1.startswith("Solution"):
+                print()
             if "Timeout exceeded" in l1:
                 solver_dict["errors"][id] = "Timeout exceeded"
             elif re.findall("Solution:.*: \d(.\d*)?", l1):
@@ -123,9 +125,12 @@ def solver_report(f):
                 except ValueError:
                     print(el1)
             else:
-                _, el0, el1 = l1.split(":", 2)
-                el0 = el0.strip()
-                solver_dict["errors"][id] = el0
+                try:
+                    _, el0, el1 = l1.split(":", 2)
+                    el0 = el0.strip()
+                    solver_dict["errors"][id] = el0
+                except ValueError:
+                    solver_dict["errors"][id] = "No output"
 
             l2 = fh.readline()
             assert l2.startswith("Time")
@@ -137,8 +142,22 @@ def solver_report(f):
 
 
 if __name__ == '__main__':
-    solver_output_f = "/home/suster/Apps/out/log_w20191008_170849_062092/solver_output_pl_t"
-    test_corp = Nlp4plpCorpus("/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev", convert_consts=False)
+    #solver_output_f = "/home/suster/Apps/out/log_w20191008_170849_062092/solver_output_pl_p"
+    #test_corp = Nlp4plpCorpus("/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev",
+    #    convert_consts="our-map")
+
+    #solver_output_f = "/home/suster/Apps/out/log_w20191015_145853_447894/solver_output_pl_p"
+    #test_corp = Nlp4plpCorpus("/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev", convert_consts="no-our-map")
+
+    #solver_output_f = "/home/suster/Apps/out/log_w20191015_161430_083999/solver_output_pl_p"
+    #test_corp = Nlp4plpCorpus("/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev",
+    #    convert_consts="no")
+
+    solver_output_f = "/home/suster/Apps/out/log_w20191017_124408_738282/solver_output_pl_p"
+    test_corp = Nlp4plpCorpus(
+        "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev",
+        convert_consts="no-our-map")
+
     test_dict = {inst.id: inst.ans for inst in test_corp.insts}
     solver_dict, stat = solver_report(solver_output_f)
     print(f"N errors: {len(solver_dict['errors'])}")
@@ -150,10 +169,10 @@ if __name__ == '__main__':
     for id in common_ids:
         true.append(test_dict[id])
         pred.append(solver_dict["solved"][id])
-    print(mean_absolute_error(true, pred))
+    print(f"mae: {mean_absolute_error(true, pred)}")
     true_str = [str(round(i, 4)) for i in true]
     pred_str = [str(round(i, 4)) for i in pred]
-    print(accuracy_score(true_str, pred_str))
+    print(f"acc: {accuracy_score(true_str, pred_str)}")
 
 
 

@@ -115,22 +115,22 @@ def encode_labels(fit_labels, transform_labels):
 
 
 class Nlp4plpInst:
-    def __init__(self, ls, low=True, tokenizer=word_tokenize):
+    def __init__(self, ls, low=True, tokenizer=word_tokenize, convert_consts=None):
         self.f = None
-        self.id, self.ans, self.ans_raw, self.txt, self.statements, self.num2n_map = self.read(ls, low, tokenizer)
+        self.convert_consts = convert_consts
+        self.id, self.ans, self.ans_raw, self.txt, self.statements, self.num2n_map = self.read(ls, low, tokenizer, convert_consts)
         self.words_anno = None
         #self.txt = None
         self.pos = None
         self.f_anno = None
 
     @staticmethod
-    def read(ls, low, tokenize):
+    def read(ls, low, tokenize, convert_consts=None):
         problem_l = to_lower(ls[0], low)
         if "\t" in problem_l:
             problem_id = problem_l[1:problem_l.find("\t")].strip()
         else:
             problem_id = problem_l[1:problem_l.find(":")].strip()
-        problem_txt_lst = tokenize(problem_l[problem_l.find(":") + 1: problem_l.find("##")].strip())
         problem_ans_raw = problem_l[problem_l.find("##") + len("## Solution:"):].strip()
         problem_ans_raw = problem_ans_raw.replace("^", "**")
         try:
@@ -148,6 +148,17 @@ class Nlp4plpInst:
 
         rest_ls = ls[1:] if num2n_map is None else ls[2:]
         statements = [to_lower(l.strip(), low) for l in rest_ls if l.strip() and not l.strip().startswith("%")]
+        problem_txt_lst = tokenize(problem_l[problem_l.find(":") + 1: problem_l.find("##")].strip())
+        # now done in add_txt_anno()
+        #if convert_consts == "no-our-map":  # convert num symbols back to numbers in the text based on map
+        #    inv_num2n_map = {v: k for k,v in num2n_map.items()}
+        #    l = []
+        #    for i in problem_txt_lst:
+        #        if i in inv_num2n_map:
+        #            l.append(inv_num2n_map[i])
+        #        else:
+        #            l.append(i)
+        #problem_txt_lst = l
 
         # return problem_id, problem_txt_lst, problem_ans, problem_ans_raw, statements
         return problem_id, problem_ans, problem_ans_raw, problem_txt_lst, statements, num2n_map
@@ -179,7 +190,8 @@ class Nlp4plpInst:
         except KeyError:
             dep_l = []
         dep_d = dep_list_to_dict(dep_l)
-        #txt = []
+        if self.convert_consts in {"no-our-map", "no"}:  # rewrite the source txt which includes num symbs with original txt with annos
+            txt = []
         pos = []
         rels = []
         num = []
@@ -187,7 +199,8 @@ class Nlp4plpInst:
             try:
                 s = self.words_anno[str(i + 1)]
                 for j in range(len(s)):
-                    #txt.append(s[str(j + 1)]["text"].lower())
+                    if self.convert_consts in {"no-our-map", "no"}:
+                        txt.append(s[str(j + 1)]["text"].lower())
                     pos_tag = s[str(j + 1)]["nlp_pos"]
                     pos.append(f"pos:{pos_tag}")
                     dep_id = f"{i + 1}-{j + 1}"
@@ -205,10 +218,9 @@ class Nlp4plpInst:
                     num.append(f"num:{num_tag}")
             except KeyError:
                 continue
-        #for c, i in enumerate(txt):
-        #    if i == "third":
-        #        if txt[c-1] == "one":
-        #            print()
+        if self.convert_consts in {"no-our-map", "no"}:  # rewrite the source txt which includes num symbs with original txt with annos
+            self.txt = txt
+
         diff_len = len(self.txt) - len(pos)
         if diff_len > 0:
             pos.extend(diff_len*["pos:"])
@@ -226,21 +238,22 @@ class Nlp4plpInst:
 class Nlp4plpCorpus:
     def __init__(self, data_dir, convert_consts):
         self.data_dir = data_dir
-        self.fs, self.insts = self.get_insts()
-        self.fitted_discretizer = None
 
-        # if True, will convert numbers in statements based on convert.py, but no map will exist for the conversion
-        # if False, will leave the numbers intact in statements. These will be converted based on the map from the
+        # if 'conv', will convert numbers in statements based on convert.py, but no map will exist for the conversion
+        # if 'our-map', will leave the numbers intact in statements. These will be converted based on the map from the
         # problem file, so that when the network outputs symols for numbers, we can convert back to numbers
         # for execution accuracy
+        # if 'no-our-map', same as 'our-map', but the numbers in the *text* won't be converted to symbols (but the map will still exist)
         self.convert_consts = convert_consts
+        self.fs, self.insts = self.get_insts()
+        self.fitted_discretizer = None
 
     def get_insts(self):
         dir_fs = get_file_list(self.data_dir, [".pl"])
         fs = []  # effective file names after removing corrupt
         insts = []
         for f in dir_fs:
-            inst = Nlp4plpInst(Nlp4plpData.read_pl(f))
+            inst = Nlp4plpInst(Nlp4plpData.read_pl(f), convert_consts=self.convert_consts)
             inst.f = f
 
             # get anno filename
@@ -693,15 +706,26 @@ class Nlp4plpCorpus:
         labels = []
         for ps in preds:
             for p in ps:
-                if self.convert_consts:
+                if self.convert_consts == "conv":
                     labels.append(p)
-                else:
+                elif self.convert_consts in {"our-map", "no-our-map"}:
                     try:
                         mapped_p = inst.num2n_map[p]
                         labels.append(mapped_p)
                     except (KeyError, TypeError):
                         labels.append(p)
-
+                elif self.convert_consts == "no":
+                    labels.append(p)
+                else:
+                    raise ValueError
+        #numbers that don't get mapped:
+        #
+        #for l in labels:
+        #    try:
+        #        f=float(l)
+        #        print(f)
+        #    except ValueError:
+        #        continue
         return labels  # [predicate1, predicate2, ...]
 
     def get_full_pl_stat_dyn_label(self, inst):
@@ -1480,3 +1504,18 @@ def get_bert_embs(insts, bert_client, bert_embs={}):
         for i, tok_i in enumerate(inst.tok_ids):
             bert_embs[tok_i] = emb[1:][i]
     return bert_embs
+
+
+def get_max_nsymb_batches(corpus, batch_size):
+    max_nsymbs = list()
+    for inst in corpus.insts:
+        # find max n symbol for masking
+        n_symbs = [int(v[1:]) for v in inst.num2n_map.values()]
+        max_nsymb = max(n_symbs) if n_symbs else None
+        max_nsymbs.append(max_nsymb)
+        if len(max_nsymbs) == batch_size:
+            yield max_nsymbs
+            max_nsymbs = list()
+
+    if max_nsymbs:
+        yield max_nsymbs

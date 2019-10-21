@@ -150,12 +150,19 @@ def main():
     arg_parser.add_argument("--bert-tok-emb-path", type=str, default="",
                             help="path to bert embeddings for all toks in train/dev/test in json format")
     arg_parser.add_argument("--bidir", action="store_true")
-    arg_parser.add_argument("--constrained-decoding", nargs='+',
+    arg_parser.add_argument("--constrained-decoding", nargs='+', type=list,
                             help="List of modifications to use:\n/"
                                  "**mod1**: label_dec1 is embedded using label_embeddings, label_dec1 as input to LSTM_dec2;\n/"
                                  "**mod2**: label_dec1 is represented as output distribution over all labels of dec1, label_dec1 as input to output layer of dec2\n/"
-                                 "**mod3**: masking for types (numbers) on output of dec2")
-    arg_parser.add_argument("--convert-consts", default=1, type=int, help="whether convert.py converts num to symbs in statements as well. If not, number are still converted, but based on a map from problem files.")
+                                 "**mod3**: masking for types (numbers) on output of dec2\n/"
+                                 "**mod4**: mask to 0 all outputs for nsymbs where n > max_n in num2n dict. Applies to single dec only.\n/"
+                                 "**mod5**: parent feeding")
+    arg_parser.add_argument("--convert-consts", required=True, type=str, help="conv | our-map | no-our-map | no. \n/"
+                                                                              "conv-> txt: -; stats: num_sym+ent_sym.\n/"
+                                                                              "our-map-> txt: num_sym; stats: num_sym(from map)+ent_sym;\n/"
+                                                                              "no-our-map-> txt: -; stats: num_sym(from map)+ent_sym;\n/"
+                                                                              "no-> txt: -; stats: -, only ent_sym;\n/")
+
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="",
                             help="path to folder from where data is loaded. Subfolder should be train/dev/test")
@@ -193,6 +200,12 @@ def main():
     # arg_parser.add_argument("--train", type=int, default=1)
     args = arg_parser.parse_args()
     args.embed_size = 1024 if args.bert else 50
+    if args.convert_consts in {"conv"}:
+        assert "nums_mapped" not in args.data_dir
+    elif args.convert_consts in {"our-map", "no-our-map", "no"}:
+        assert "nums_mapped" in args.data_dir
+    else:
+        raise ValueError
 
     # initialize corpora
     if args.model == "lstm-enc-discrete-dec":
@@ -364,8 +377,9 @@ def main():
                           'f_model': f_model,
                           'bidir': args.bidir,
                           'bert_embs': bert_embs if args.bert else None,
+                          'constrained_decoding': args.constrained_decoding,
                           'cuda': args.cuda
-                          }
+            }
             if args.feat_type:
                 feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
                 net_params['feature_idx'] = feature_encoder.vocab.word2idx
