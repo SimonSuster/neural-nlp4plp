@@ -8,7 +8,7 @@ from datetime import datetime
 from pycocoevalcap.eval import COCOEvalCap
 from util import f1_score, FileUtils
 
-random.seed(0)
+random.seed(1)
 
 import numpy as np
 
@@ -55,22 +55,23 @@ def save_preds_encdec(corp, label_vocab, _y_true, _y_pred, f_name, dir_out="../o
     print(f"Writing predictions to {dir_out}{f_name}")
 
 
-def save_preds_encdec_pl(corp, _y_true, _y_pred, log_name, label_vocab=None, dir_out="../out/"):
-    def final_repl(n, num2n_map):
-        k = []
-        for i in n:
-            if i.startswith(")"):
-                k.append(")")
-            else:
-                if num2n_map is not None:
-                    inv_num2n_map = {v: k for k, v in num2n_map.items()}
-                    if i in inv_num2n_map:
-                        k.append(inv_num2n_map[i])
-                        continue
-                k.append(i)
-        new_k = " ".join(k).replace(" ", "").replace(").", ").\n")
-        return new_k
+def final_repl(n, num2n_map):
+    k = []
+    for i in n:
+        if i.startswith(")"):
+            k.append(")")
+        else:
+            if num2n_map is not None:
+                inv_num2n_map = {v: k for k, v in num2n_map.items()}
+                if i in inv_num2n_map:
+                    k.append(inv_num2n_map[i])
+                    continue
+            k.append(i)
+    new_k = " ".join(k).replace(" ", "").replace(").", ").\n")
+    return new_k
 
+
+def save_preds_encdec_pl(corp, _y_true, _y_pred, log_name, label_vocab=None, dir_out="../out/"):
     """ as a prolog program """
     print("Saving predictions from the best model:")
     dir_out = f"{dir_out}log_w{log_name}/"
@@ -150,29 +151,30 @@ def main():
     arg_parser.add_argument("--bert-tok-emb-path", type=str, default="",
                             help="path to bert embeddings for all toks in train/dev/test in json format")
     arg_parser.add_argument("--bidir", action="store_true")
-    arg_parser.add_argument("--constrained-decoding", nargs='+', type=list,
+    arg_parser.add_argument("--constrained-decoding", nargs='+',
                             help="List of modifications to use:\n/"
                                  "**mod1**: label_dec1 is embedded using label_embeddings, label_dec1 as input to LSTM_dec2;\n/"
                                  "**mod2**: label_dec1 is represented as output distribution over all labels of dec1, label_dec1 as input to output layer of dec2\n/"
                                  "**mod3**: masking for types (numbers) on output of dec2\n/"
                                  "**mod4**: mask to 0 all outputs for nsymbs where n > max_n in num2n dict. Applies to single dec only.\n/"
-                                 "**mod5**: parent feeding")
-    arg_parser.add_argument("--convert-consts", required=True, type=str, help="conv | our-map | no-our-map | no. \n/"
+                                 "**mod5**: parent feeding (in out)\n/"
+                                 "**mod6**: parent feeding (in attention)")
+    arg_parser.add_argument("--convert-consts", type=str, help="conv | our-map | no-our-map | no. \n/"
                                                                               "conv-> txt: -; stats: num_sym+ent_sym.\n/"
                                                                               "our-map-> txt: num_sym; stats: num_sym(from map)+ent_sym;\n/"
                                                                               "no-our-map-> txt: -; stats: num_sym(from map)+ent_sym;\n/"
-                                                                              "no-> txt: -; stats: -, only ent_sym;\n/")
-
+                                                                              "no-> txt: -; stats: -, only ent_sym;\n/"
+                                                                              "no-ent-> txt: -; stats: -, no ent_sym;\n/")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="",
                             help="path to folder from where data is loaded. Subfolder should be train/dev/test")
     arg_parser.add_argument("--debug", action="store_true")
     arg_parser.add_argument("--dropout", type=float, default=0.0)
-    arg_parser.add_argument("--embed-size", type=int, help="embedding dimension")
+    arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimension")
     arg_parser.add_argument("--epochs", type=int, default=1, help="number of training epochs, default: 100")
     arg_parser.add_argument("--feat-onehot", action="store_true",
                             help="use onehot feature encoding instead of embedded")
-    arg_parser.add_argument('--feat-type', nargs='+', help="Which feature to use: pos | rels | num")
+    arg_parser.add_argument('--feat-type', nargs='+', help="Which feature to use: pos | rels | num | sen_ns")
     arg_parser.add_argument("--feat_embed-size", type=int, default=10, help="embedding dimension for external features")
     arg_parser.add_argument("--hidden-dim", type=int, default=50, help="")
     arg_parser.add_argument("--inspect", action="store_true")
@@ -195,20 +197,24 @@ def main():
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
     arg_parser.add_argument("--print-correct", action="store_true")
+    arg_parser.add_argument("--ret-period", type=int, default=20, help="stop training if no improvement in both acc and f1 during last 'ret-period' epochs")
     arg_parser.add_argument("--save-model", action="store_true")
     # arg_parser.add_argument("--test", type=int, default=1)
     # arg_parser.add_argument("--train", type=int, default=1)
     args = arg_parser.parse_args()
-    args.embed_size = 1024 if args.bert else 50
+    if args.bert:
+        args.embed_size = 1024
     if args.convert_consts in {"conv"}:
         assert "nums_mapped" not in args.data_dir
-    elif args.convert_consts in {"our-map", "no-our-map", "no"}:
+    elif args.convert_consts in {"our-map", "no-our-map", "no", "no-ent"}:
         assert "nums_mapped" in args.data_dir
     else:
-        raise ValueError
+        if args.convert_consts is not None:
+            raise ValueError
 
+    print(args)
     # initialize corpora
-    if args.model == "lstm-enc-discrete-dec":
+    if args.model == "lstm-enc-discrete-dec" and args.label_type_dec != "n-predicates":
         train_corp = Nlp4plpCorpus(args.data_dir + "train")
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
         test_corp = Nlp4plpCorpus(args.data_dir + "test")
@@ -216,8 +222,6 @@ def main():
         train_corp.discretize(n_bins=args.n_bins)
         dev_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
         test_corp.discretize(fitted_discretizer=train_corp.fitted_discretizer)
-
-        label_size = len({inst.ans_discrete for inst in train_corp.insts})
     elif args.model == "lstm-enc-regression-dec":
         train_corp = Nlp4plpCorpus(args.data_dir + "train")
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
@@ -234,7 +238,7 @@ def main():
         train_corp.remove_none_labels()
         dev_corp.remove_none_labels()
         test_corp.remove_none_labels()
-    elif args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
+    elif args.model in {"lstm-enc-dec", "lstm-enc-split-dec", "lstm-enc-discrete-dec"}:
         train_corp = Nlp4plpCorpus(args.data_dir + "train", args.convert_consts)
         if args.augment_train:
             train_corp = augment_train(train_corp)
@@ -246,7 +250,7 @@ def main():
             train_corp.insts = train_corp.insts[:10]
             dev_corp.fs = dev_corp.fs[:10]
             dev_corp.insts = dev_corp.insts[:10]
-            test_corp.insts = test_corp.insts[:10]
+            #test_corp.insts = test_corp.insts[:10]
 
         train_corp.get_labels(label_type=args.label_type_dec, max_output_len=args.max_output_len)
         dev_corp.get_labels(label_type=args.label_type_dec, max_output_len=args.max_output_len)
@@ -256,9 +260,10 @@ def main():
         c = dev_corp.add_tok_ids(c)
         c = test_corp.add_tok_ids(c)
 
-        train_corp.remove_none_labels()
-        dev_corp.remove_none_labels()
-        test_corp.remove_none_labels()
+        if args.label_type_dec != "n-predicates":
+            train_corp.remove_none_labels()
+            dev_corp.remove_none_labels()
+            test_corp.remove_none_labels()
 
         if args.bert:
             if args.no_load_bert:
@@ -291,9 +296,10 @@ def main():
                           'hidden_dim': args.hidden_dim,
                           'vocab_size': corpus_encoder.vocab.size,
                           'padding_idx': corpus_encoder.vocab.pad,
+                          'label_padding_idx': corpus_encoder.label_vocab.pad,
                           'embedding_dim': args.embed_size,
                           'dropout': args.dropout,
-                          'label_size': label_size,
+                          'label_size': len(corpus_encoder.label_vocab),
                           'batch_size': args.batch_size,
                           'word_idx': corpus_encoder.vocab.word2idx,
                           'pretrained_emb_path': args.pretrained_emb_path,
@@ -362,23 +368,23 @@ def main():
             f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
             print(f"f_model: {f_model}")
             net_params = {'n_layers': args.n_layers,
-                          'hidden_dim': args.hidden_dim,
-                          'vocab_size': corpus_encoder.vocab.size,
-                          'padding_idx': corpus_encoder.vocab.pad,
-                          'label_padding_idx': corpus_encoder.label_vocab.pad,
-                          'embedding_dim': args.embed_size,
-                          'dropout': args.dropout,
-                          'batch_size': args.batch_size,
-                          'word_idx': corpus_encoder.vocab.word2idx,
-                          'label_idx': corpus_encoder.label_vocab.word2idx,
-                          'pretrained_emb_path': args.pretrained_emb_path,
-                          'max_output_len': args.max_output_len,
-                          'label_size': len(corpus_encoder.label_vocab),
-                          'f_model': f_model,
-                          'bidir': args.bidir,
-                          'bert_embs': bert_embs if args.bert else None,
-                          'constrained_decoding': args.constrained_decoding,
-                          'cuda': args.cuda
+                      'hidden_dim': args.hidden_dim,
+                      'vocab_size': corpus_encoder.vocab.size,
+                      'padding_idx': corpus_encoder.vocab.pad,
+                      'label_padding_idx': corpus_encoder.label_vocab.pad,
+                      'embedding_dim': args.embed_size,
+                      'dropout': args.dropout,
+                      'batch_size': args.batch_size,
+                      'word_idx': corpus_encoder.vocab.word2idx,
+                      'label_idx': corpus_encoder.label_vocab.word2idx,
+                      'pretrained_emb_path': args.pretrained_emb_path,
+                      'max_output_len': args.max_output_len,
+                      'label_size': len(corpus_encoder.label_vocab),
+                      'f_model': f_model,
+                      'bidir': args.bidir,
+                      'bert_embs': bert_embs if args.bert else None,
+                      'constrained_decoding': args.constrained_decoding,
+                      'cuda': args.cuda
             }
             if args.feat_type:
                 feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
@@ -442,7 +448,8 @@ def main():
         optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
 
         print(os.path.abspath('../out/' + classifier.f_model))
-        classifier.train_model(train_corp, dev_corp, corpus_encoder, feature_encoder, args.epochs, optimizer)
+        classifier.train_model(train_corp, dev_corp, corpus_encoder, feature_encoder, args.epochs, args.ret_period, optimizer)
+
 
         # load model
         if args.model == 'lstm-enc-discrete-dec':
@@ -470,7 +477,7 @@ def main():
             _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
 
         # for accuracy calculation
-        if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"} or net_params["output_len"] > 1:
+        if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}: # or net_params["output_len"] > 1:
             y_true = [str(y) for y in _y_true]
             y_pred = [str(y) for y in _y_pred]
         else:
@@ -483,7 +490,7 @@ def main():
             test_acc1 = accuracy_score(y_true=y_true1, y_pred=y_pred1)
             test_acc2 = accuracy_score(y_true=y_true2, y_pred=y_pred2)
             print(f"acc dec1: {test_acc1}, acc dec2: {test_acc2}")
-        if not args.print_correct and args.model == "lstm-enc-discrete-dec":
+        if not args.print_correct and (args.model == "lstm-enc-discrete-dec" and args.label_type_dec != "n-predicates"):
             correct = get_correct_problems(test_corp, y_pred, test_corp.fitted_discretizer.bin_edges_[0])
             print(correct)
         if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
@@ -512,16 +519,16 @@ def main():
         # inspect(test_corp, _y_true, _y_pred)
         # get dev predictions
         if args.model == "lstm-enc-split-dec":
-            _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(dev_corp, feature_encoder,
+            _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(test_corp, feature_encoder,
                                                                                             corpus_encoder)
         else:
-            _y_pred, _y_true = classifier.predict(dev_corp, feature_encoder, corpus_encoder)
+            _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
         # inspect_encdec(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred)
         if args.save_model:
             if args.label_type_dec == "full-pl":
-                save_preds_encdec_pl(dev_corp, _y_true, _y_pred, f_model, label_vocab=corpus_encoder.label_vocab)
+                save_preds_encdec_pl(test_corp, _y_true, _y_pred, f_model, label_vocab=corpus_encoder.label_vocab)
             elif args.label_type_dec in {"full-pl-split", "full-pl-split-stat-dyn"}:
-                save_preds_encdec_pl(dev_corp, _y_true, _y_pred, f_model)
+                save_preds_encdec_pl(test_corp, _y_true, _y_pred, f_model)
     if not args.save_model:
         classifier.remove(f_model=classifier.f_model)
 

@@ -6,7 +6,7 @@ from nlp4plp.evaluate.allpredicates import get_all_predicates, get_full_pl, get_
     get_full_pl_no_arg_id, get_full_pl_id, get_full_pl_id_plc
 from nlp4plp.evaluate.eval import parse_file
 
-random.seed(0)
+random.seed(1)
 import re
 from os.path import realpath, join
 
@@ -194,10 +194,13 @@ class Nlp4plpInst:
             txt = []
         pos = []
         rels = []
+        #rels_second = []  # second order
         num = []
+        sen_ns = []  # number of the sentence in which the word occurs
         for i in range(len(self.words_anno)):
             try:
-                s = self.words_anno[str(i + 1)]
+                sen_n = str(i + 1)
+                s = self.words_anno[sen_n]
                 for j in range(len(s)):
                     if self.convert_consts in {"no-our-map", "no"}:
                         txt.append(s[str(j + 1)]["text"].lower())
@@ -216,6 +219,7 @@ class Nlp4plpInst:
                         num_tag = []
                     num_tag = True if num_tag else False
                     num.append(f"num:{num_tag}")
+                    sen_ns.append(f"sen_n:{sen_n}")
             except KeyError:
                 continue
         if self.convert_consts in {"no-our-map", "no"}:  # rewrite the source txt which includes num symbs with original txt with annos
@@ -233,6 +237,10 @@ class Nlp4plpInst:
         if diff_len > 0:
             num.extend(diff_len * ["num:"])
         self.num = num
+        diff_len = len(self.txt) - len(sen_ns)
+        if diff_len > 0:
+            num.extend(diff_len * ["sen_n:"])
+        self.sen_ns = sen_ns
 
 
 class Nlp4plpCorpus:
@@ -677,6 +685,23 @@ class Nlp4plpCorpus:
 
         return labels  # [predicate1, predicate2, ...]
 
+    def get_n_predicates_label(self, inst):
+        """
+        Get predicate sequence type as a label
+        """
+
+        def get_outer_predicates(s):
+            hits = re.findall(r"^(\w+)", s)
+            assert len(hits) == 1, (s, inst.id)
+            return hits.pop()
+
+        predicates = []
+        for statement in inst.statements:
+            predicates.append(get_outer_predicates(statement))
+        label = " ".join(predicates)
+
+        return label
+
     def get_predicates_all_label(self, inst):
         """
         Get all (outer and inner) predicate names as labels
@@ -702,7 +727,10 @@ class Nlp4plpCorpus:
         Includes predicates, arguments, parentheses and dot
         """
         problog_program = parse_file(inst.f)
-        preds = get_full_pl(problog_program, convert_consts=self.convert_consts)
+        preds, id_map = get_full_pl(problog_program, convert_consts=self.convert_consts)
+        if self.convert_consts == "no-ent":
+            # convert ent symbs back to original
+            inv_id_map = {v: k for k, v in id_map.items()}
         labels = []
         for ps in preds:
             for p in ps:
@@ -716,6 +744,20 @@ class Nlp4plpCorpus:
                         labels.append(p)
                 elif self.convert_consts == "no":
                     labels.append(p)
+                elif self.convert_consts == "no-ent":
+                    if p in inv_id_map:
+                        _p = inv_id_map[p]
+                        hs = re.findall("(\d)-(\d+)", _p)
+                        if hs:
+                            s_id, tok_id = hs.pop()
+                            try:
+                                _p = inst.words_anno[s_id][tok_id]["text"]
+                            except KeyError:
+                                # wrongly recognized as indices
+                                labels.append(_p)
+                        labels.append(_p)
+                    else:
+                        labels.append(p)
                 else:
                     raise ValueError
         #numbers that don't get mapped:
@@ -735,7 +777,7 @@ class Nlp4plpCorpus:
                                           If stat, only static, if dyn, only dynamic.
         """
         problog_program = parse_file(inst.f)
-        preds = get_full_pl(problog_program)
+        preds, id_map = get_full_pl(problog_program)
         preds1, preds2 = [], []
         for ps in preds:
             start = ps[0]
@@ -757,17 +799,37 @@ class Nlp4plpCorpus:
         Includes predicates, arguments, parentheses and dot, but arg ents don't have ids
         """
         problog_program = parse_file(inst.f)
-        preds = get_full_pl_no_arg_id(problog_program)
-        labels = [p for ps in preds for p in ps]
+
+        if self.convert_consts == "conv":
+            preds = get_full_pl_no_arg_id(problog_program, self.convert_consts)
+            labels = [p for ps in preds for p in ps]
+        elif self.convert_consts in {"our-map", "no-our-map"}:
+            preds, id_map = get_full_pl(problog_program, convert_consts=self.convert_consts)
+            labels = []
+            for ps in preds:
+                for p in ps:
+                    if p in inst.num2n_map:
+                        labels.append("n")
+                    elif re.match("^l\d+$", p):
+                        labels.append("l")
+                    else:
+                        labels.append(p)
+        else:
+            raise ValueError
 
         return labels  # [predicate1, predicate2, ...]
+        #problog_program = parse_file(inst.f)
+        #preds = get_full_pl_no_arg_id(problog_program, self.convert_consts)
+        #labels = [p for ps in preds for p in ps]
+
+        #return labels  # [predicate1, predicate2, ...]
 
     def get_full_pl_id_label(self, inst):
         """
         Instead of args ents we have ids (integers), instead of all other elements we have COPY
         """
         problog_program = parse_file(inst.f)
-        preds = get_full_pl_id(problog_program)
+        preds = get_full_pl_id(problog_program, self.convert_consts)
         labels = [p for ps in preds for p in ps]
 
         return labels
@@ -787,7 +849,7 @@ class Nlp4plpCorpus:
         Instead of args ents we have ids (integers), instead of all other elements we have COPY
         """
         problog_program = parse_file(inst.f)
-        preds = get_full_pl_id_plc(problog_program, compact=True)
+        preds = get_full_pl_id_plc(problog_program, compact=True, convert_consts=self.convert_consts)
         labels = [p for ps in preds for p in ps]
 
         return labels
@@ -824,6 +886,8 @@ class Nlp4plpCorpus:
     def get_labels(self, label_type, max_output_len=None):
         if label_type == "predicates":
             get_label = self.get_predicates_label
+        elif label_type == "n-predicates":
+            get_label = self.get_n_predicates_label
         elif label_type == "predicates-all":
             get_label = self.get_predicates_all_label
         elif label_type == "predicates-arguments-all":
@@ -855,11 +919,14 @@ class Nlp4plpCorpus:
             elif isinstance(get_label, tuple):
                 inst.label = get_label[0](inst)
                 inst.label2 = get_label[1](inst)
+                assert len(inst.label) == len(inst.label2)
                 if max_output_len is not None:
                     if len(inst.label) > max_output_len:
                         inst.label = None
                     if len(inst.label2) > max_output_len:
                         inst.label2 = None
+            elif label_type == "n-predicates":
+                inst.ans_discrete = get_label(inst)
             else:
                 inst.label = get_label(inst)
                 if max_output_len is not None and len(inst.label) > max_output_len:
@@ -957,6 +1024,26 @@ class CorpusEncoder:
         #     out = out + [self.vocab.eos]
         return out
 
+    def encode_label(self, label):
+        '''
+        Converts sentence to sequence of indices after adding beginning, end and replacing unk tokens.
+        @todo: check if beg and end of seq and line are required for our classification setup.
+        '''
+        out = self.transform_label(label)
+        # if self.vocab.bos is not None:
+        #     out = [self.vocab.bos] + out
+        return out
+
+    def transform_label(self, label):
+        # return self.label_vocab.word2idx[label]
+        try:
+            return self.label_vocab.word2idx[label]
+        except KeyError:
+            if self.label_vocab.unk is None:
+                raise ValueError("Couldn't retrieve <unk> for unknown token")
+            else:
+                return self.label_vocab.unk
+
     def transform_item(self, item):
         '''
         Returns the index for an item if present in vocab, <unk> otherwise.
@@ -977,7 +1064,10 @@ class CorpusEncoder:
         for inst in corpus.insts:
             cur_inst = self.encode_inst(inst.txt)
             instances.append(cur_inst)
-            labels.append(inst.ans_discrete)
+            if isinstance(inst.ans_discrete, str):
+                labels.append(self.encode_label(inst.ans_discrete))
+            else:
+                labels.append(inst.ans_discrete)
             if len(instances) == batch_size:
                 yield (instances, labels)
                 instances = list()
@@ -1047,6 +1137,7 @@ class Nlp4plpEncoder(CorpusEncoder):
         # create vocab set for initializing Vocab class
         vocab_set = set()
         # sg_set = set()
+        label_vocab_set = set()
 
         for corpus in corpora:
             for inst in corpus.insts:
@@ -1054,17 +1145,19 @@ class Nlp4plpEncoder(CorpusEncoder):
                 for word in inst.txt:
                     if not word in vocab_set:
                         vocab_set.add(word)
-
+                if inst.ans_discrete not in label_vocab_set:
+                    label_vocab_set.add(inst.ans_discrete)
         # create vocabs
         # @todo: add min and max freq to vocab items
         vocab = Vocab.populate_indices(vocab_set, unk=UNK, pad=PAD)  # bos=BOS, eos=EOS, bol=BOL, eol=EOL),
         # sg = Vocab.populate_indices(sg_set)
+        label_vocab = Vocab.populate_indices(label_vocab_set, eos=EOS, pad=PAD, unk=UNK)
 
         # return cls(vocab, sg)
-        return cls(vocab)
+        return cls(vocab, label_vocab)
 
     @classmethod
-    def feature_from_corpus(cls, *corpora, feat_type=["pos", "rels", "num"]):
+    def feature_from_corpus(cls, *corpora, feat_type=["pos", "rels", "num", "sen_ns"]):
         # create vocab set for initializing Vocab class
         vocab_set = set()
         # sg_set = set()

@@ -37,7 +37,7 @@ class ConstraintStats:
 
     def get_all(self):
         self.c["N_is_integer"] = Counter()
-        for d in data:
+        for d in self.data:
             self.c["arity"] += self.arity(d)
             self.c["N_is_integer"] += self.N_is_integer(d)
             self.c["all_attr_vals_diff"] += self.all_attr_vals_diff(d)
@@ -203,11 +203,12 @@ class ConstraintStats:
 
 if __name__ == '__main__':
     arg_parser = argparse.ArgumentParser(description="")
-    arg_parser.add_argument("--data-dir", type=str, default="/home/suster/Apps/out/log_w20190906_001042_206510/",
+    #arg_parser.add_argument("--data-dir", type=str, default="/home/suster/Apps/out/log_w20190906_001042_206510/",
+    arg_parser.add_argument("--data-dir", type=str, default="/home/suster/Apps/out/log_w20191015_161430_083999/",
                             help="path to folder to be analyzedd")
     args = arg_parser.parse_args()
 
-    fs = get_file_list(args.data_dir, ["pl_p"])  # prediction files
+    fs = get_file_list(args.data_dir, [".pl_p"])  # prediction files
     data = []
     for f in fs:
         with open(f) as fh:

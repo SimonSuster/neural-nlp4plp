@@ -141,12 +141,21 @@ class Encoder(nn.Module):
 
 class LSTMClassifier(nn.Module):
     # based on https://github.com/MadhumitaSushil/sepsis/blob/master/src/classifiers/lstm.py
-    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, label_size, batch_size,
-                 word_idx, pretrained_emb_path, f_model, cuda=0):
+    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, dropout, label_size, batch_size,
+                 word_idx, pretrained_emb_path, f_model, bidir=False,
+                 bert_embs=None,
+                 constrained_decoding=None,
+                 feature_idx=None,
+                 feat_size=None,
+                 feat_padding_idx=None,
+                 feat_emb_dim=None,
+                 feat_type=None,
+                 feat_onehot=None, cuda=0):
         super().__init__()
         self.n_lstm_layers = n_layers
         self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size
+        self.label_padding_idx = label_padding_idx
         self.emb_dim = embedding_dim
         self.dropout = dropout
         self.batch_size = batch_size
@@ -154,6 +163,17 @@ class LSTMClassifier(nn.Module):
         self.word_idx = word_idx
         self.pretrained_emb_path = pretrained_emb_path
         self.f_model = f_model
+        self.bidir = bidir
+        self.bert_embs = bert_embs
+        self.constrained_decoding = constrained_decoding
+        self.feature_idx = feature_idx
+        self.feat_size = feat_size
+        self.feat_padding_idx = feat_padding_idx
+        self.feat_emb_dim = feat_emb_dim
+        self.feat_type = feat_type
+        self.feat_onehot = feat_onehot
+        self.final_emb_dim = self.emb_dim + (
+            self.feat_emb_dim * len(self.feat_type) if self.feat_emb_dim is not None else 0)
 
         if torch.cuda.is_available():
             self.device = torch.device(f'cuda:{cuda}')
@@ -161,13 +181,15 @@ class LSTMClassifier(nn.Module):
             self.device = torch.device('cpu')
 
         self.encoder = Encoder(n_layers, hidden_dim, vocab_size, padding_idx, embedding_dim, dropout, batch_size,
-                               word_idx, pretrained_emb_path, cuda=cuda)
+                               word_idx, pretrained_emb_path, bidir, bert_embs, feature_idx, feat_size,
+                               feat_padding_idx,
+                               feat_emb_dim, feat_type, feat_onehot, cuda=cuda)
         self.hidden2label = nn.Linear(self.hidden_dim, self.n_labels)  # hidden to output layer
         self.to(self.device)
 
     def forward(self, sentence, sent_lengths):
         hidden = self.encoder.init_hidden()
-        lstm_output, hidden = self.encoder(sentence, sent_lengths, hidden)
+        lstm_output, hidden = self.encoder(sentence, None, sent_lengths, hidden)
         # use the output of the last LSTM layer at the end of the last valid timestep to predict output
         # If sequence len is constant, using hidden[0] is the same as lstm_out[-1].
         # For variable len seq, use hidden[0] for the hidden state at last valid timestep. Do it for the last hidden layer
@@ -179,10 +201,10 @@ class LSTMClassifier(nn.Module):
     def loss(self, fwd_out, target):
         # NLL loss to be used when logits have log-softmax output.
         # If softmax layer is not added, directly CrossEntropyLoss can be used.
-        loss_fn = nn.NLLLoss()
+        loss_fn = nn.NLLLoss(ignore_index=self.label_padding_idx)
         return loss_fn(fwd_out, target)
 
-    def train_model(self, corpus, dev_corpus, corpus_encoder, feature_encoder, n_epochs, optimizer):
+    def train_model(self, corpus, dev_corpus, corpus_encoder, feature_encoder, n_epochs, ret_period, optimizer):
 
         self.train()
 
@@ -209,7 +231,7 @@ class LSTMClassifier(nn.Module):
                 loss.backward()  # compute gradients for network params w.r.t loss
                 optimizer.step()  # perform the gradient update step
                 running_loss += loss.item()
-            y_pred, y_true = self.predict(dev_corpus, corpus_encoder)
+            y_pred, y_true = self.predict(dev_corpus, None, corpus_encoder)
             self.train()  # set back the train mode
             dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
             if i == 0 or dev_acc > best_acc:
@@ -217,7 +239,7 @@ class LSTMClassifier(nn.Module):
                 best_acc = dev_acc
             print('ep %d, loss: %.3f, dev_acc: %.3f' % (i, running_loss, dev_acc))
 
-    def predict(self, corpus, corpus_encoder):
+    def predict(self, corpus, feature_encoder, corpus_encoder):
         self.eval()
         y_pred = list()
         y_true = list()
@@ -239,6 +261,7 @@ class LSTMClassifier(nn.Module):
                       'hidden_dim': self.hidden_dim,
                       'vocab_size': self.vocab_size,
                       'padding_idx': self.encoder.word_embeddings.padding_idx,
+                      'label_padding_idx': self.label_padding_idx,
                       'embedding_dim': self.emb_dim,
                       'dropout': self.dropout,
                       'label_size': self.n_labels,
@@ -420,7 +443,8 @@ class PointerAttention(nn.Module):
         self.hidden_dim = hidden_dim
 
         self.input_linear = nn.Linear(input_dim, hidden_dim)
-        self.context_linear = nn.Conv1d(input_dim, hidden_dim, 1, 1)
+        #self.context_linear = nn.Conv1d(input_dim, hidden_dim, 1, 1)
+        self.context_linear = nn.Conv1d(hidden_dim, hidden_dim, 1, 1)
         self.V = Parameter(torch.FloatTensor(hidden_dim), requires_grad=True)
         self._inf = Parameter(torch.FloatTensor([float('-inf')]), requires_grad=False)
         self.tanh = nn.Tanh()
@@ -747,7 +771,7 @@ class ConstrainedDecoderForSingleDec(nn.Module):
         self.n_labels = n_labels
         self.label_idx = label_idx
         self.constrained_decoding = constrained_decoding
-        if self.constrained_decoding is not None and "mod5" in constrained_decoding:
+        if self.constrained_decoding is not None and ("mod5" in constrained_decoding or "mod6" in constrained_decoding):
             self.par_idxs = [v for k,v in label_idx.items() if k[:-1] in STAT | DYN]
         self.teacher_forcing = True
         self.label_embeddings = nn.Embedding(self.n_labels, self.emb_dim,
@@ -756,7 +780,10 @@ class ConstrainedDecoderForSingleDec(nn.Module):
         self.input_to_hidden = nn.Linear(self.emb_dim, 4 * hidden_dim)
         self.hidden_to_hidden = nn.Linear(hidden_dim, 4 * hidden_dim)
         self.hidden_out = nn.Linear(hidden_dim * 2, hidden_dim)
-        self.att = PointerAttention(hidden_dim, hidden_dim)
+        if self.constrained_decoding is not None and "mod6" in self.constrained_decoding:
+            self.att = PointerAttention(2*hidden_dim+embedding_dim, hidden_dim)
+        else:
+            self.att = PointerAttention(hidden_dim, hidden_dim)
         # self.out = nn.Linear(hidden_dim + hidden_dim + self.final_emb_dim, self.n_labels)
         self.out_dim = hidden_dim + hidden_dim + self.emb_dim
         if self.constrained_decoding is not None and "mod5" in self.constrained_decoding:
@@ -766,7 +793,7 @@ class ConstrainedDecoderForSingleDec(nn.Module):
         # Used for propagating .cuda() command
         self.to(self.device)
 
-    def forward(self, sent_lengths, output_length, decoder_input, hidden, context, cur_labels, cur_max_nsymbs):
+    def forward(self, sent_lengths, output_length, decoder_input, hidden, context, cur_labels, cur_max_nsymbs=None):
         """
         Decoder - Forward-pass
 
@@ -785,7 +812,7 @@ class ConstrainedDecoderForSingleDec(nn.Module):
         outputs = []
         preds = []
 
-        if self.constrained_decoding is not None and "mod5" in self.constrained_decoding:
+        if self.constrained_decoding is not None and ("mod5" in self.constrained_decoding or "mod6" in self.constrained_decoding):
             par_decoder_input = decoder_input.clone()  # will hold parent label embeddings
             par_hidden = hidden[0].clone()  # will hold parent hidden state
 
@@ -795,7 +822,7 @@ class ConstrainedDecoderForSingleDec(nn.Module):
             output_length = self.max_output_len
         # Recurrence loop
         for i in range(output_length):
-            if self.constrained_decoding is not None and "mod5" in self.constrained_decoding:
+            if self.constrained_decoding is not None and ("mod5" in self.constrained_decoding or "mod6" in self.constrained_decoding):
                 h_t, c_t, outs = self.step(i, decoder_input, hidden, context, par_decoder_input, par_hidden)
             else:
                 h_t, c_t, outs = self.step(i, decoder_input, hidden, context)
@@ -810,7 +837,7 @@ class ConstrainedDecoderForSingleDec(nn.Module):
             else:
                 decoder_input = self.label_embeddings(indices)
 
-            if self.constrained_decoding is not None and "mod5" in self.constrained_decoding:
+            if self.constrained_decoding is not None and ("mod5" in self.constrained_decoding or "mod6" in self.constrained_decoding):
                 idxs = cur_labels[:, i] if self.teacher_forcing and not is_inference else indices
                 for c, l in enumerate(idxs):  # check if label is a parent label
                     if l in self.par_idxs:
@@ -850,7 +877,10 @@ class ConstrainedDecoderForSingleDec(nn.Module):
         h_t = out * F.tanh(c_t)
 
         # Attention section
-        weighted, output_att = self.att(h_t, context, None)
+        if self.constrained_decoding is not None and "mod6" in self.constrained_decoding:
+            weighted, output_att = self.att(torch.cat((h_t, par_decoder_input, par_hidden), 1), context, None)
+        else:
+            weighted, output_att = self.att(h_t, context, None)
         hidden_t = F.tanh(self.hidden_out(torch.cat((weighted, h_t), 1)))
 
         # hidden_t: b*hidden_dim
@@ -1388,14 +1418,21 @@ class EncoderDecoder(nn.Module):
         loss_fn = nn.CrossEntropyLoss(ignore_index=self.label_padding_idx)
         return loss_fn(fwd_out, target)
 
-    def train_model(self, corpus, dev_corpus, corpus_encoder, feature_encoder, n_epochs, optimizer):
+    def train_model(self, corpus, dev_corpus, corpus_encoder, feature_encoder, n_epochs, ret_period, optimizer):
 
         self.train()
 
         optimizer = optimizer
         best_acc = 0.
+        best_f1 = 0.
+        next_ep = True  # use retention period
+        i = -1
+        dev_accs = []
+        dev_f1s = []
 
-        for i in range(n_epochs):
+        #for i in range(n_epochs):
+        while next_ep:
+            i += 1
             running_loss = 0.0
 
             # shuffle the corpus
@@ -1440,10 +1477,22 @@ class EncoderDecoder(nn.Module):
             y_pred = [str(y) for y in _y_pred]
             self.train()  # set back the train mode
             dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
+            dev_accs.append(dev_acc)
             dev_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
-            if i == 0 or dev_acc > best_acc:
+            dev_f1s.append(dev_f1)
+            #if i == 0 or dev_acc > best_acc:
+            if len(dev_accs) == 1 or dev_acc > best_acc:
                 self.save(self.f_model)
                 best_acc = dev_acc
+                best_acc_i = i
+                print("**best_acc: %.3f**" % best_acc)
+            if len(dev_f1s) == 1 or dev_f1 > best_f1:
+                best_f1 = dev_f1
+                best_f1_i = i
+            # stopping criterion with a retention period of 10 epochs:
+            if len(dev_accs) > ret_period - 1 and (i-best_acc_i > ret_period and i-best_f1_i > ret_period):
+                next_ep = False
+
             print('ep %d, loss: %.3f, dev_acc: %.3f, dev_f1: %.3f' % (i, running_loss, dev_acc, dev_f1))
 
     def predict(self, corpus, feature_encoder, corpus_encoder):
@@ -1739,14 +1788,21 @@ class EncoderSplitDecoder(nn.Module):
         loss_fn = nn.CrossEntropyLoss(ignore_index=self.label_padding_idx)
         return loss_fn(fwd_out, target)
 
-    def train_model(self, corpus, dev_corpus, corpus_encoder, feature_encoder, n_epochs, optimizer):
+    def train_model(self, corpus, dev_corpus, corpus_encoder, feature_encoder, n_epochs, ret_period, optimizer):
 
         self.train()
 
         optimizer = optimizer
         best_acc = 0.
+        best_f1 = 0.
+        next_ep = True  # use retention period
+        i = -1
+        dev_accs = []
+        dev_f1s = []
 
-        for i in range(n_epochs):
+        #for i in range(n_epochs):
+        while next_ep:
+            i += 1
             running_loss = 0.0
 
             # shuffle the corpus
@@ -1801,12 +1857,27 @@ class EncoderSplitDecoder(nn.Module):
             y_true2 = [str(y) for y in _y_true2]
             self.train()  # set back the train mode
             dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
+            dev_accs.append(dev_acc)
             dev_acc1 = accuracy_score(y_true=y_true1, y_pred=y_pred1)
             dev_acc2 = accuracy_score(y_true=y_true2, y_pred=y_pred2)
             # print(f"acc dec1: {dev_acc1}, acc dec2: {dev_acc2}")
             dev_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
-            if i == 0 or dev_acc > best_acc:
+            dev_f1s.append(dev_f1)
+            #if i == 0 or dev_acc > best_acc:
+            #    self.save(self.f_model)
+            if len(dev_accs) == 1 or dev_acc > best_acc:
                 self.save(self.f_model)
+                best_acc = dev_acc
+                best_acc_i = i
+                print("**best_acc: %.3f**" % best_acc)
+            if len(dev_f1s) == 1 or dev_f1 > best_f1:
+                best_f1 = dev_f1
+                best_f1_i = i
+
+            # stopping criterion with a retention period of 10 epochs:
+            if len(dev_accs) > ret_period - 1 and (i - best_acc_i > ret_period and i - best_f1_i > ret_period):
+                next_ep = False
+
             print('ep %d, loss: %.3f, dev_acc1: %.3f, dev_acc2: %.3f. dev_acc: %.3f, dev_f1: %.3f' % (
             i, running_loss, dev_acc1, dev_acc2, dev_acc, dev_f1))
 

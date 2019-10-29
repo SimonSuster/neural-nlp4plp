@@ -141,22 +141,42 @@ def solver_report(f):
     return solver_dict, stat
 
 
-if __name__ == '__main__':
-    #solver_output_f = "/home/suster/Apps/out/log_w20191008_170849_062092/solver_output_pl_p"
-    #test_corp = Nlp4plpCorpus("/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev",
-    #    convert_consts="our-map")
-
-    #solver_output_f = "/home/suster/Apps/out/log_w20191015_145853_447894/solver_output_pl_p"
-    #test_corp = Nlp4plpCorpus("/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev", convert_consts="no-our-map")
-
-    #solver_output_f = "/home/suster/Apps/out/log_w20191015_161430_083999/solver_output_pl_p"
-    #test_corp = Nlp4plpCorpus("/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev",
+def main_solver():
+    #solver_output_f = "/home/suster/Apps/out/log_w_gold_test/solver_output_pl_t"
+    #test_corp = Nlp4plpCorpus(
+    #    "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test",
     #    convert_consts="no")
 
-    solver_output_f = "/home/suster/Apps/out/log_w20191017_124408_738282/solver_output_pl_p"
+    # solver_output_f = "/home/suster/Apps/out/log_w20191008_170849_062092/solver_output_pl_p"
+    # test_corp = Nlp4plpCorpus("/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev",
+    #    convert_consts="our-map")
+
+    # solver_output_f = "/home/suster/Apps/out/log_w20191015_145853_447894/solver_output_pl_p"
+    # test_corp = Nlp4plpCorpus("/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev", convert_consts="no-our-map")
+
+    #solver_output_f = "/home/suster/Apps/out/log_w20191015_161430_083999/solver_output_pl_p"
+    #test_corp = Nlp4plpCorpus(
+    #    "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev",
+    #    convert_consts="no")
+
+    # solver_output_f = "/home/suster/Apps/out/log_w20191017_124408_738282/solver_output_pl_p"
+    # test_corp = Nlp4plpCorpus(
+    #    "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev",
+    #    convert_consts="no-our-map")
+
+    # solver_output_f = "/home/suster/Apps/out/log_w20191018_143339_894302/solver_output_pl_p"
+    # test_corp = Nlp4plpCorpus(
+    #    "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev", convert_consts="no")
+
+    #solver_output_f = "/home/suster/Apps/out/log_wnearest-neighbour-full-pl_testset/solver_output_pl_p"
+    #test_corp = Nlp4plpCorpus(
+    #    "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test", convert_consts="no")
+
+    solver_output_f = "/home/suster/Apps/out/log_w20191028_154505_649365/solver_output_pl_p"
     test_corp = Nlp4plpCorpus(
-        "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "dev",
-        convert_consts="no-our-map")
+        "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test", convert_consts="our-map")
+
+
 
     test_dict = {inst.id: inst.ans for inst in test_corp.insts}
     solver_dict, stat = solver_report(solver_output_f)
@@ -169,27 +189,50 @@ if __name__ == '__main__':
     for id in common_ids:
         true.append(test_dict[id])
         pred.append(solver_dict["solved"][id])
-    print(f"mae: {mean_absolute_error(true, pred)}")
+    print(f"mae: {mean_absolute_error(true, pred):.3f}")
     true_str = [str(round(i, 4)) for i in true]
     pred_str = [str(round(i, 4)) for i in pred]
-    print(f"acc: {accuracy_score(true_str, pred_str)}")
+    acc = accuracy_score(true_str, pred_str)
+    print(f"acc: {acc:.3f}")
+    n_correct = acc*len(solver_dict['solved'])
+    corr_acc = n_correct / (len(solver_dict['errors']) + len(solver_dict['solved']))
+    print(f"corr acc: {corr_acc:.3f}")
+
+    # non-zero output
+    common_ids = test_dict.keys() & {k for k, v in solver_dict["solved"].items() if v != 0}
+    print(f'{len(common_ids)} out of {len(solver_dict["solved"].items())} solved had non-zero output.')
+    true = []
+    pred = []
+    for id in common_ids:
+        true.append(test_dict[id])
+        pred.append(solver_dict["solved"][id])
+    print(f"mae (non-zero): {mean_absolute_error(true, pred):.3f}")
+    true_str = [str(round(i, 4)) for i in true]
+    pred_str = [str(round(i, 4)) for i in pred]
+    print(f"acc (non-zero): {accuracy_score(true_str, pred_str):.3f}")
 
 
-
+def main_test_train_comparison():
     #jp = JsonPred(f_json="../out/20190621_101845_634116.json")  # outermost
     #label_type_dec = "predicates"
+    jp = JsonPred(f_json="../out/20190621_102143_175948.json")  # bidir, all preds+args
+    label_type_dec = "predicates-arguments-all"
+    correct, incorrect = jp.get_pos_neg()
+    insts = jp.inspect_sorted_f1()
+    print_sorted_f1(insts)
+    acc_vs_len(correct, incorrect)
+    jp.acc_per_len()
 
-    #jp = JsonPred(f_json="../out/20190621_102143_175948.json")  # bidir, all preds+args
-    #label_type_dec = "predicates-arguments-all"
-    #correct, incorrect = jp.get_pos_neg()
-    #insts = jp.inspect_sorted_f1()
-    #print_sorted_f1(insts)
-    #acc_vs_len(correct, incorrect)
-    #jp.acc_per_len()
+    train_corp = Nlp4plpCorpus("/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits/train")
 
-    #train_corp = Nlp4plpCorpus("/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits/train")
+    max_output_len = 100 if label_type_dec == "predicates-arguments-all" else 50
+    train_corp.get_labels(label_type=label_type_dec, max_output_len=max_output_len)
+    train_corp.remove_none_labels()
+    preds_in_gold(correct, train_corp)
 
-    #max_output_len = 100 if label_type_dec == "predicates-arguments-all" else 50
-    #train_corp.get_labels(label_type=label_type_dec, max_output_len=max_output_len)
-    #train_corp.remove_none_labels()
-    #preds_in_gold(correct, train_corp)
+if __name__ == '__main__':
+    main_solver()
+
+    #main_test_train_comparison()
+
+
