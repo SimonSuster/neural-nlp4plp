@@ -1,6 +1,10 @@
+import operator
 import os
 import random
 import re
+from queue import PriorityQueue
+
+from matplotlib import ticker
 
 from corpus_util import get_max_nsymb_batches
 
@@ -23,7 +27,8 @@ from sklearn.metrics import accuracy_score, mean_squared_error
 
 from util import TorchUtils, load_emb, f1_score, load_bert
 from corpus_util import STAT, DYN
-import traceback
+
+#import matplotlib.pyplot as plt
 
 
 class Encoder(nn.Module):
@@ -141,7 +146,8 @@ class Encoder(nn.Module):
 
 class LSTMClassifier(nn.Module):
     # based on https://github.com/MadhumitaSushil/sepsis/blob/master/src/classifiers/lstm.py
-    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, dropout, label_size, batch_size,
+    def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, dropout,
+                 label_size, batch_size,
                  word_idx, pretrained_emb_path, f_model, bidir=False,
                  bert_embs=None,
                  constrained_decoding=None,
@@ -443,7 +449,7 @@ class PointerAttention(nn.Module):
         self.hidden_dim = hidden_dim
 
         self.input_linear = nn.Linear(input_dim, hidden_dim)
-        #self.context_linear = nn.Conv1d(input_dim, hidden_dim, 1, 1)
+        # self.context_linear = nn.Conv1d(input_dim, hidden_dim, 1, 1)
         self.context_linear = nn.Conv1d(hidden_dim, hidden_dim, 1, 1)
         self.V = Parameter(torch.FloatTensor(hidden_dim), requires_grad=True)
         self._inf = Parameter(torch.FloatTensor([float('-inf')]), requires_grad=False)
@@ -670,7 +676,7 @@ class Decoder(nn.Module):
         # Used for propagating .cuda() command
         self.to(self.device)
 
-    def forward(self, sent_lengths, output_length, decoder_input, hidden, context, cur_labels):
+    def forward(self, sent_lengths, output_length, decoder_input, hidden, context, cur_labels, attention_plot=False):
         """
         Decoder - Forward-pass
 
@@ -687,6 +693,8 @@ class Decoder(nn.Module):
         # converts data to packed sequences with data and batch size at every time step after sorting them per lengths
         # embs = nn.utils.rnn.pack_padded_sequence(embs[:, sort], sent_lengths[sort], batch_first=False)
         outputs = []
+        if attention_plot:
+            outputs_att = []
         preds = []
 
         is_inference = output_length is None
@@ -695,7 +703,9 @@ class Decoder(nn.Module):
             output_length = self.max_output_len
         # Recurrence loop
         for i in range(output_length):
-            h_t, c_t, outs = self.step(i, decoder_input, hidden, context)
+            h_t, c_t, outs, outs_att = self.step(i, decoder_input, hidden, context, attention_plot)
+            if attention_plot:
+                outputs_att.append(outs_att.unsqueeze(0))
             hidden = (h_t, c_t)
             # Get maximum probabilities and indices
             max_probs, indices = outs.max(1)
@@ -711,9 +721,13 @@ class Decoder(nn.Module):
         outputs = torch.cat(outputs).permute(1, 0, 2)  # (b * output_len * n_labels)
         preds = torch.cat(preds, 1)  # (b * output_len)
 
-        return (outputs, preds), hidden
+        if attention_plot:
+            outputs_att = torch.cat(outputs_att).permute(1, 0, 2)  # (b * output_len * n_labels)
+            return (outputs, preds), hidden, outputs_att
+        else:
+            return (outputs, preds), hidden
 
-    def step(self, i, x, hidden, context):
+    def step(self, i, x, hidden, context, attention_plot, log_softmax=False):
         """
         Recurrence step function
 
@@ -745,8 +759,10 @@ class Decoder(nn.Module):
         # weighted: b*hidden_dim
         # x: b*final_emb_dim
         output = self.out(torch.cat((hidden_t, weighted, x), dim=1))
+        if log_softmax:
+            output = F.log_softmax(output, dim=1)
 
-        return hidden_t, c_t, output
+        return hidden_t, c_t, output, output_att if attention_plot else None
 
 
 class ConstrainedDecoderForSingleDec(nn.Module):
@@ -772,7 +788,7 @@ class ConstrainedDecoderForSingleDec(nn.Module):
         self.label_idx = label_idx
         self.constrained_decoding = constrained_decoding
         if self.constrained_decoding is not None and ("mod5" in constrained_decoding or "mod6" in constrained_decoding):
-            self.par_idxs = [v for k,v in label_idx.items() if k[:-1] in STAT | DYN]
+            self.par_idxs = [v for k, v in label_idx.items() if k[:-1] in STAT | DYN]
         self.teacher_forcing = True
         self.label_embeddings = nn.Embedding(self.n_labels, self.emb_dim,
                                              padding_idx=label_padding_idx)  # embedding layer, initialized at random
@@ -781,7 +797,7 @@ class ConstrainedDecoderForSingleDec(nn.Module):
         self.hidden_to_hidden = nn.Linear(hidden_dim, 4 * hidden_dim)
         self.hidden_out = nn.Linear(hidden_dim * 2, hidden_dim)
         if self.constrained_decoding is not None and "mod6" in self.constrained_decoding:
-            self.att = PointerAttention(2*hidden_dim+embedding_dim, hidden_dim)
+            self.att = PointerAttention(2 * hidden_dim + embedding_dim, hidden_dim)
         else:
             self.att = PointerAttention(hidden_dim, hidden_dim)
         # self.out = nn.Linear(hidden_dim + hidden_dim + self.final_emb_dim, self.n_labels)
@@ -812,7 +828,8 @@ class ConstrainedDecoderForSingleDec(nn.Module):
         outputs = []
         preds = []
 
-        if self.constrained_decoding is not None and ("mod5" in self.constrained_decoding or "mod6" in self.constrained_decoding):
+        if self.constrained_decoding is not None and (
+                "mod5" in self.constrained_decoding or "mod6" in self.constrained_decoding):
             par_decoder_input = decoder_input.clone()  # will hold parent label embeddings
             par_hidden = hidden[0].clone()  # will hold parent hidden state
 
@@ -822,7 +839,8 @@ class ConstrainedDecoderForSingleDec(nn.Module):
             output_length = self.max_output_len
         # Recurrence loop
         for i in range(output_length):
-            if self.constrained_decoding is not None and ("mod5" in self.constrained_decoding or "mod6" in self.constrained_decoding):
+            if self.constrained_decoding is not None and (
+                    "mod5" in self.constrained_decoding or "mod6" in self.constrained_decoding):
                 h_t, c_t, outs = self.step(i, decoder_input, hidden, context, par_decoder_input, par_hidden)
             else:
                 h_t, c_t, outs = self.step(i, decoder_input, hidden, context)
@@ -837,7 +855,8 @@ class ConstrainedDecoderForSingleDec(nn.Module):
             else:
                 decoder_input = self.label_embeddings(indices)
 
-            if self.constrained_decoding is not None and ("mod5" in self.constrained_decoding or "mod6" in self.constrained_decoding):
+            if self.constrained_decoding is not None and (
+                    "mod5" in self.constrained_decoding or "mod6" in self.constrained_decoding):
                 idxs = cur_labels[:, i] if self.teacher_forcing and not is_inference else indices
                 for c, l in enumerate(idxs):  # check if label is a parent label
                     if l in self.par_idxs:
@@ -1290,6 +1309,35 @@ class PointerNet(nn.Module):
         return classifier
 
 
+def write_att_plots(cur_insts, word_idx, labels, label_idx, outputs_att, log_name, ids):
+    dir_out = f"../out/log_w{log_name}/"
+    if not os.path.exists(dir_out):
+        os.makedirs(dir_out)
+
+    inv_label_idx = {v: k for k,v in label_idx.items()}
+    inv_word_idx = {v: k for k, v in word_idx.items()}
+
+    n = outputs_att.shape[0]
+    for k in range(n):
+        ws = ["<s>"]+[inv_word_idx[idx.item()] for idx in cur_insts[:, k]]
+        ls = ["<s>"]+[inv_label_idx[idx.item()] for idx in labels[k, :]]
+
+        fig = plt.figure(figsize=(12, 22))
+        ax = fig.add_subplot(111)
+        out = outputs_att[k].cpu().detach().numpy()
+        cax = ax.matshow(out)
+        fig.colorbar(cax)
+        ax.tick_params(axis='both', which='major', labelsize=6)
+        ax.tick_params(axis='both', which='minor', labelsize=5)
+        ax.set_xticklabels(ws)
+        ax.set_yticklabels(ls)
+        ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+        ax.yaxis.set_major_locator(ticker.MultipleLocator(1))
+        ax.tick_params(axis='x', labelrotation=90)
+        plt.savefig(f"{dir_out}{ids[k]}.pdf")
+        plt.close(fig)
+
+
 class EncoderDecoder(nn.Module):
     def __init__(self,
                  n_layers,
@@ -1380,7 +1428,8 @@ class EncoderDecoder(nn.Module):
         self.to(self.device)
 
     #    def forward(self, inputs):
-    def forward(self, sentence, features, sent_lengths, output_length=None, cur_labels=None, cur_max_nsymbs=None):
+    def forward(self, sentence, features, sent_lengths, output_length=None, cur_labels=None, cur_max_nsymbs=None,
+                attention_plot=False, beam_decoding=False):
         # input_length = inputs.size(1)
         cur_batch_len = len(sent_lengths)
         decoder_input0 = self.decoder_input0.unsqueeze(0).expand(cur_batch_len, -1)
@@ -1400,19 +1449,134 @@ class EncoderDecoder(nn.Module):
                                encoder_hidden[1][-1])
         if cur_max_nsymbs is not None:
             (outputs, labels), decoder_hidden = self.decoder(sent_lengths, output_length,
-                                                         decoder_input0,
-                                                         decoder_hidden0,
-                                                         encoder_outputs,
-                                                         cur_labels,
-                                                         cur_max_nsymbs)
-        else:
-            (outputs, labels), decoder_hidden = self.decoder(sent_lengths, output_length,
                                                              decoder_input0,
                                                              decoder_hidden0,
                                                              encoder_outputs,
-                                                             cur_labels)
+                                                             cur_labels,
+                                                             cur_max_nsymbs)
+        else:
+            decode = self.beam_decode if beam_decoding else self.decoder
+            out = decode(sent_lengths, output_length, decoder_input0, decoder_hidden0,
+                               encoder_outputs,
+                               cur_labels,
+                               attention_plot)
+            if attention_plot:
+                (outputs, labels), decoder_hidden, outputs_att = out
+            else:
+                if beam_decoding:
+                    outputs, labels = None, out
+                else:
+                    (outputs, labels), decoder_hidden = out
 
-        return outputs, labels
+        if attention_plot:
+            return outputs, labels, outputs_att
+        else:
+            return outputs, labels
+
+    def beam_decode(self, sent_lengths, output_length, decoder_input0, hidden, context, cur_labels, attention_plot=False):
+        '''
+        :param decoder_hiddens: input tensor of shape [1, B, H] for start of the decoding
+        :param encoder_outputs: if you are using attention mechanism you can pass encoder outputs, [T, B, H] where T is the maximum length of input sentence
+        :return: decoded_batch
+        '''
+        cur_batch_len = len(sent_lengths)
+        beam_width = 10
+        topk = 1  # how many sentence do you want to generate
+        decoded_batch = []
+
+        # decoding goes sentence by sentence
+        for idx in range(cur_batch_len):
+            if isinstance(hidden, tuple):  # LSTM case
+                decoder_hidden = (
+                hidden[0][idx, :].unsqueeze(0), hidden[1][idx, :].unsqueeze(0))
+            else:
+                decoder_hidden = hidden[idx, :].unsqueeze(0)
+            #encoder_output = encoder_outputs[:, idx, :].unsqueeze(1)
+            encoder_output = context[idx, :, :].unsqueeze(0)
+
+            # Start with the start of the sentence token
+            #decoder_input = torch.LongTensor([[SOS_token]], device=device)
+            decoder_input = decoder_input0[idx].unsqueeze(0)  # label emb
+            decoder_input_label = self.label_idx["<s>"]
+            # Number of sentence to generate
+            endnodes = []
+            number_required = min((topk + 1), topk - len(endnodes))
+
+            # starting node -  hidden vector, previous node, word id, logp, length
+            node = BeamSearchNode(decoder_hidden, None, decoder_input_label, decoder_input, 0, 1)
+            nodes = PriorityQueue()
+
+            # start the queue
+            nodes.put((-node.eval(), node))
+            qsize = 1
+
+            # start beam search
+            while True:
+                # give up when decoding takes too long
+                if qsize > 2000: break
+
+                # fetch the best node
+                score, n = nodes.get()
+                decoder_input = n.labelemb
+                # decoder_input_label = n.wordid
+                decoder_hidden = n.h
+
+                if n.wordid == self.label_idx["</s>"] and n.prevNode != None:
+                    endnodes.append((score, n))
+                    # if we reached maximum # of sentences required
+                    if len(endnodes) >= number_required:
+                        break
+                    else:
+                        continue
+
+                # decode for one step using decoder
+                h_t, c_t, decoder_output, _ = self.decoder.step(None, decoder_input, decoder_hidden, encoder_output, attention_plot=False, log_softmax=True)
+                decoder_hidden = (h_t, c_t)
+                # PUT HERE REAL BEAM SEARCH OF TOP
+                log_prob, indexes = torch.topk(decoder_output, beam_width)
+                nextnodes = []
+
+                for new_k in range(beam_width):
+                    #decoded_t = indexes[0][new_k].view(1, -1)
+                    decoded_t = indexes[0][new_k]
+                    log_p = log_prob[0][new_k].item()
+
+                    decoded_t_emb = self.decoder.label_embeddings(decoded_t).unsqueeze(0)
+                    node = BeamSearchNode(decoder_hidden, n, decoded_t.item(), decoded_t_emb, n.logp + log_p, n.leng + 1)
+                    score = -node.eval()
+                    nextnodes.append((score, node))
+
+                # put them into queue
+                for i in range(len(nextnodes)):
+                    score, nn = nextnodes[i]
+                    nodes.put((score, nn))
+                    # increase qsize
+                qsize += len(nextnodes) - 1
+
+            # choose nbest paths, back trace them
+            if len(endnodes) == 0:
+                endnodes = [nodes.get() for _ in range(topk)]
+
+            utterances = []
+            for score, n in sorted(endnodes, key=operator.itemgetter(0)):
+                utterance = []
+                utterance.append(n.wordid)
+                # back trace
+                while n.prevNode != None:
+                    n = n.prevNode
+                    utterance.append(n.wordid)
+
+                utterance = utterance[::-1]
+                if utterance[0] == self.label_idx["<s>"]:
+                    utterance = utterance[1:]
+                if utterance[-1] == self.label_idx["</s>"]:
+                    utterance = utterance[:-1]
+                utterances.append(utterance)  # skip <s> and </s>
+
+            decoded_batch.append(utterances)
+
+        return decoded_batch
+
 
     def loss(self, fwd_out, target):
         loss_fn = nn.CrossEntropyLoss(ignore_index=self.label_padding_idx)
@@ -1430,7 +1594,7 @@ class EncoderDecoder(nn.Module):
         dev_accs = []
         dev_f1s = []
 
-        #for i in range(n_epochs):
+        # for i in range(n_epochs):
         while next_ep:
             i += 1
             running_loss = 0.0
@@ -1453,7 +1617,8 @@ class EncoderDecoder(nn.Module):
                     assert len(cur_feats) == len(cur_insts)
                     cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
                                                                                            len(self.feat_type))
-                cur_max_nsymbs = _max_nsymbs.__next__() if (self.constrained_decoding is not None and "mod4" in self.constrained_decoding) else None
+                cur_max_nsymbs = _max_nsymbs.__next__() if (
+                            self.constrained_decoding is not None and "mod4" in self.constrained_decoding) else None
                 cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(
                     cur_insts, cur_labels, self.device, padding_idx=0 if self.bert_embs else corpus_encoder.vocab.pad)
                 output_length = max(cur_label_lengths).item()
@@ -1480,7 +1645,7 @@ class EncoderDecoder(nn.Module):
             dev_accs.append(dev_acc)
             dev_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
             dev_f1s.append(dev_f1)
-            #if i == 0 or dev_acc > best_acc:
+            # if i == 0 or dev_acc > best_acc:
             if len(dev_accs) == 1 or dev_acc > best_acc:
                 self.save(self.f_model)
                 best_acc = dev_acc
@@ -1490,12 +1655,12 @@ class EncoderDecoder(nn.Module):
                 best_f1 = dev_f1
                 best_f1_i = i
             # stopping criterion with a retention period of 10 epochs:
-            if len(dev_accs) > ret_period - 1 and (i-best_acc_i > ret_period and i-best_f1_i > ret_period):
+            if len(dev_accs) > ret_period - 1 and (i - best_acc_i > ret_period and i - best_f1_i > ret_period):
                 next_ep = False
 
             print('ep %d, loss: %.3f, dev_acc: %.3f, dev_f1: %.3f' % (i, running_loss, dev_acc, dev_f1))
 
-    def predict(self, corpus, feature_encoder, corpus_encoder):
+    def predict(self, corpus, feature_encoder, corpus_encoder, attention_plot=False, beam_decoding=False):
         self.eval()
         y_pred = list()
         y_true = list()
@@ -1514,7 +1679,8 @@ class EncoderDecoder(nn.Module):
                 assert len(cur_feats) == len(cur_insts)
                 cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
                                                                                        len(self.feat_type))
-            cur_max_nsymbs = _max_nsymbs.__next__() if (self.constrained_decoding is not None and "mod4" in self.constrained_decoding) else None
+            cur_max_nsymbs = _max_nsymbs.__next__() if (
+                        self.constrained_decoding is not None and "mod4" in self.constrained_decoding) else None
             cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(cur_insts,
                                                                                                     cur_labels,
                                                                                                     self.device,
@@ -1522,11 +1688,22 @@ class EncoderDecoder(nn.Module):
             y_true.extend(cur_labels.cpu().numpy())
 
             # forward pass
-            _, labels = self.forward(cur_insts, cur_feats, cur_lengths, cur_labels=cur_labels, cur_max_nsymbs=cur_max_nsymbs)
+            out = self.forward(cur_insts, cur_feats, cur_lengths, cur_labels=cur_labels, cur_max_nsymbs=cur_max_nsymbs,
+                               attention_plot=attention_plot, beam_decoding=beam_decoding)
 
-            y_pred.extend(labels.squeeze(1).cpu().numpy())
+            if attention_plot:
+                _, labels, outputs_att = out
+            else:
+                _, labels = out
+            if attention_plot:
+                ids = [inst.id for inst in corpus.insts[len(y_true) - cur_insts.shape[1]:len(y_true)]]
+                write_att_plots(cur_insts, self.word_idx, labels, self.label_idx, outputs_att, self.f_model, ids)
+            if not beam_decoding:
+                labels = labels.squeeze(1).cpu().numpy()
+            y_pred.extend(labels)
         y_true = corpus_encoder.strip_until_eos(y_true)
-        y_pred = corpus_encoder.strip_until_eos(y_pred)
+        if not beam_decoding:
+            y_pred = corpus_encoder.strip_until_eos(y_pred)
         return y_pred, y_true
 
     def save(self, f_model='lstm_encdec.tar', dir_model='../out/'):
@@ -1800,7 +1977,7 @@ class EncoderSplitDecoder(nn.Module):
         dev_accs = []
         dev_f1s = []
 
-        #for i in range(n_epochs):
+        # for i in range(n_epochs):
         while next_ep:
             i += 1
             running_loss = 0.0
@@ -1863,7 +2040,7 @@ class EncoderSplitDecoder(nn.Module):
             # print(f"acc dec1: {dev_acc1}, acc dec2: {dev_acc2}")
             dev_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
             dev_f1s.append(dev_f1)
-            #if i == 0 or dev_acc > best_acc:
+            # if i == 0 or dev_acc > best_acc:
             #    self.save(self.f_model)
             if len(dev_accs) == 1 or dev_acc > best_acc:
                 self.save(self.f_model)
@@ -1879,7 +2056,7 @@ class EncoderSplitDecoder(nn.Module):
                 next_ep = False
 
             print('ep %d, loss: %.3f, dev_acc1: %.3f, dev_acc2: %.3f. dev_acc: %.3f, dev_f1: %.3f' % (
-            i, running_loss, dev_acc1, dev_acc2, dev_acc, dev_f1))
+                i, running_loss, dev_acc1, dev_acc2, dev_acc, dev_f1))
 
     def predict(self, corpus, feature_encoder, corpus_encoder):
         def join_dec_labels(l1, l2, exclude_type_str=False, compact=False):
@@ -2003,9 +2180,9 @@ class EncoderSplitDecoder(nn.Module):
                 else:
                     raise ValueError
         return y_pred, y_true, (
-        corpus_encoder.strip_until_eos(labels.cpu().numpy()), corpus_encoder.strip_until_eos(labels2.cpu().numpy()),
-        corpus_encoder.strip_until_eos(cur_labels.cpu().numpy()),
-        corpus_encoder.strip_until_eos(cur_labels2.cpu().numpy()))
+            corpus_encoder.strip_until_eos(labels.cpu().numpy()), corpus_encoder.strip_until_eos(labels2.cpu().numpy()),
+            corpus_encoder.strip_until_eos(cur_labels.cpu().numpy()),
+            corpus_encoder.strip_until_eos(cur_labels2.cpu().numpy()))
 
     def save(self, f_model='lstm_encsplitdec.tar', dir_model='../out/'):
 
@@ -2060,3 +2237,27 @@ class EncoderSplitDecoder(nn.Module):
     @classmethod
     def remove(cls, f_model='lstm_encsplitdec.tar'):
         os.remove("../out/" + f_model)
+
+
+class BeamSearchNode(object):
+    def __init__(self, hiddenstate, previousNode, wordId, labelEmb, logProb, length):
+        '''
+        :param hiddenstate:
+        :param previousNode:
+        :param wordId:
+        :param labelEmb:
+        :param logProb:
+        :param length:
+        '''
+        self.h = hiddenstate
+        self.prevNode = previousNode
+        self.wordid = wordId
+        self.labelemb = labelEmb
+        self.logp = logProb
+        self.leng = length
+
+    def eval(self, alpha=1.0):
+        reward = 0
+        # Add here a function for shaping a reward
+
+        return self.logp / float(self.leng - 1 + 1e-6) + alpha * reward

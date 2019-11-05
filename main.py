@@ -2,6 +2,8 @@ import argparse
 import os
 import pickle
 import random
+import sys
+from collections import Counter
 from copy import deepcopy
 from datetime import datetime
 
@@ -142,8 +144,10 @@ def augment_train(train_corp, fac=10):
 
 def main():
     arg_parser = argparse.ArgumentParser(description="parser for End-to-End Memory Networks")
+    arg_parser.add_argument("--attention-plot", action="store_true")
     arg_parser.add_argument("--augment-train", action="store_true")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training")
+    arg_parser.add_argument("--beam-decoding", action="store_true")
     arg_parser.add_argument("--bert", action="store_true",
                             help="use bert to initialize token embeddings")
     arg_parser.add_argument("--no-load-bert", action="store_true",
@@ -182,7 +186,7 @@ def main():
     arg_parser.add_argument("--label-type", type=str,
                             help="group | take | take_wr | both_take | take3 | take_declen2 | take_wr_declen2 | take_declen3 | take_wr_declen3 | both_take_declen3. To use with PointerNet.")
     arg_parser.add_argument("--label-type-dec", type=str,
-                            help="predicates | predicates-all | predicates-arguments-all | full-pl | full-pl-no-arg-id | full-pl-split | full-pl-split-plc | full-pl-split-stat-dyn. To use with EncDec.")
+                            help="predicates | n-predicates | n-full | predicates-all | predicates-arguments-all | full-pl | full-pl-no-arg-id | full-pl-split | full-pl-split-plc | full-pl-split-stat-dyn. To use with EncDec.")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.001")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
     arg_parser.add_argument("--max-output-len", type=int, default=500,
@@ -214,7 +218,7 @@ def main():
 
     print(args)
     # initialize corpora
-    if args.model == "lstm-enc-discrete-dec" and args.label_type_dec != "n-predicates":
+    if args.model == "lstm-enc-discrete-dec" and args.label_type_dec not in {"n-predicates", "n-full"}:
         train_corp = Nlp4plpCorpus(args.data_dir + "train")
         dev_corp = Nlp4plpCorpus(args.data_dir + "dev")
         test_corp = Nlp4plpCorpus(args.data_dir + "test")
@@ -250,7 +254,7 @@ def main():
             train_corp.insts = train_corp.insts[:10]
             dev_corp.fs = dev_corp.fs[:10]
             dev_corp.insts = dev_corp.insts[:10]
-            #test_corp.insts = test_corp.insts[:10]
+            test_corp.insts = test_corp.insts[:10]
 
         train_corp.get_labels(label_type=args.label_type_dec, max_output_len=args.max_output_len)
         dev_corp.get_labels(label_type=args.label_type_dec, max_output_len=args.max_output_len)
@@ -260,7 +264,7 @@ def main():
         c = dev_corp.add_tok_ids(c)
         c = test_corp.add_tok_ids(c)
 
-        if args.label_type_dec != "n-predicates":
+        if args.label_type_dec not in {"n-predicates", "n-full"}:
             train_corp.remove_none_labels()
             dev_corp.remove_none_labels()
             test_corp.remove_none_labels()
@@ -468,17 +472,20 @@ def main():
         # get predictions
         if args.model == "lstm-enc-split-dec":
             _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(test_corp, feature_encoder,
-                                                                                            corpus_encoder)
+                                                                                            corpus_encoder, args.attention_plot)
             y_pred1 = [str(y) for y in _y_pred1]
             y_pred2 = [str(y) for y in _y_pred2]
             y_true1 = [str(y) for y in _y_true1]
             y_true2 = [str(y) for y in _y_true2]
         else:
-            _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
+            _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder, args.attention_plot, args.beam_decoding)
 
         # for accuracy calculation
         if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}: # or net_params["output_len"] > 1:
             y_true = [str(y) for y in _y_true]
+            if args.beam_decoding:
+                # 1st best
+                _y_pred = [preds[0] for preds in _y_pred]
             y_pred = [str(y) for y in _y_pred]
         else:
             y_true = _y_true
@@ -490,7 +497,7 @@ def main():
             test_acc1 = accuracy_score(y_true=y_true1, y_pred=y_pred1)
             test_acc2 = accuracy_score(y_true=y_true2, y_pred=y_pred2)
             print(f"acc dec1: {test_acc1}, acc dec2: {test_acc2}")
-        if not args.print_correct and (args.model == "lstm-enc-discrete-dec" and args.label_type_dec != "n-predicates"):
+        if not args.print_correct and (args.model == "lstm-enc-discrete-dec" and args.label_type_dec not in {"n-predicates", "n-full"}):
             correct = get_correct_problems(test_corp, y_pred, test_corp.fitted_discretizer.bin_edges_[0])
             print(correct)
         if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
@@ -518,12 +525,11 @@ def main():
     if args.inspect:
         # inspect(test_corp, _y_true, _y_pred)
         # get dev predictions
-        if args.model == "lstm-enc-split-dec":
-            _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(test_corp, feature_encoder,
-                                                                                            corpus_encoder)
-        else:
-            _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
-        # inspect_encdec(dev_corp, corpus_encoder.label_vocab, _y_true, _y_pred)
+        #if args.model == "lstm-enc-split-dec":
+        #    _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(test_corp, feature_encoder,
+        #                                                                                    corpus_encoder)
+        #else:
+        #    _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
         if args.save_model:
             if args.label_type_dec == "full-pl":
                 save_preds_encdec_pl(test_corp, _y_true, _y_pred, f_model, label_vocab=corpus_encoder.label_vocab)

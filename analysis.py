@@ -172,11 +172,17 @@ def main_solver():
     #test_corp = Nlp4plpCorpus(
     #    "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test", convert_consts="no")
 
-    solver_output_f = "/home/suster/Apps/out/log_w20191028_154505_649365/solver_output_pl_p"
+    #solver_output_f = "/home/suster/Apps/out/log_w20191028_154505_649365/solver_output_pl_p"
+    #test_corp = Nlp4plpCorpus(
+    #    "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test", convert_consts="our-map")
+
+    #solver_output_f = "/nfshome/suster/Apps/out/log_w20191031_174902_118257/solver_output_pl_p"
+    #test_corp = Nlp4plpCorpus(
+    #    "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test", convert_consts="no")
+
+    solver_output_f = "/home/suster/Apps/out/log_w20191104_210005_133239/solver_output_pl_p"
     test_corp = Nlp4plpCorpus(
-        "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test", convert_consts="our-map")
-
-
+        "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test", convert_consts="no")
 
     test_dict = {inst.id: inst.ans for inst in test_corp.insts}
     solver_dict, stat = solver_report(solver_output_f)

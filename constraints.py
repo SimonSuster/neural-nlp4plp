@@ -50,6 +50,7 @@ class ConstraintStats:
             self.c["dyn_set_group"] += self.dyn_set_group(d)
             self.c["take_group"] += self.take_group(d)
             self.c["take_args_diff"] += self.take_args_diff(d)
+            self.c["parenth"] += self.parenth(d)
 
     def arity(self, d):
         """
@@ -63,26 +64,47 @@ class ConstraintStats:
                     return True
         return False
 
-    def N_is_integer(self, d):
+    def N_is_integer(self, d, n_symb=False):
         """
         check those predicates which should have N at a certain position
         """
+        def is_int(w):
+            if n_symb:
+                return w.lower().startswith("n")
+            else:
+                try:
+                    _ = int(w)
+                    return True
+                except ValueError:
+                    return False
+
         c = Counter()
         f = d[0]
         for p, a in iter_p_a(d[1]):
             if p in {"size", "take", "take_wr"}:
                 n = a.split(",")[-1]
-                if not n.lower().startswith("n"):
+                if not is_int(n):
                     c[p] = 1
             #elif p in {"exactly", "atleast", "atmost", "more_than", "less_than", "nth"}:
             #    n = a.split(",")[0]
             #    if not n.lower().startswith("n"):
             #        c[p] = 1
-        h = re.findall("(exactly|atleast|atmost|more_than|less_than|nth)\((.)\d,.*,.*\)", "\n".join(d[1]))
-        for g in h:
-            if g[1] != "n":
-                c[g[0]] = 1
-        return c
+        if n_symb:
+            h = re.findall("(exactly|atleast|atmost|more_than|less_than|nth)\((.)\d,.*,.*\)", "\n".join(d[1]))
+            for g in h:
+                if g[1] != "n":
+                    c[g[0]] = 1
+            return c
+        else:
+            h = re.findall("(exactly|atleast|atmost|more_than|less_than|nth)\(([^,]+),.*,.*\)", "\n".join(d[1]))
+            for g in h:
+                if "rel" in g[1]:
+                    continue
+                try:
+                    _ = int(g[1])
+                except ValueError:
+                    c[g[0]] = 1
+            return c
 
     def all_attr_vals_diff(self, d):
         f = d[0]
@@ -125,6 +147,7 @@ class ConstraintStats:
     def givens_property(self, d):
         """
         in given(exactly(*,*,P)), P must be used in exactly one property
+        if P is and(P_1, P_2), they need to be mentioned in different properties (?) TODO
         """
         f = d[0]
         pas = {(p, a) for p, a in iter_p_a(d[1])}
@@ -200,11 +223,18 @@ class ConstraintStats:
                 return True
         return False
 
+    def parenth(self, d):
+        c = 0
+        for i in d[1]:
+            if len(re.findall("\(", i)) != len(re.findall("\)", i)):
+                c += 1
 
+        return c
 if __name__ == '__main__':
     arg_parser = argparse.ArgumentParser(description="")
     #arg_parser.add_argument("--data-dir", type=str, default="/home/suster/Apps/out/log_w20190906_001042_206510/",
-    arg_parser.add_argument("--data-dir", type=str, default="/home/suster/Apps/out/log_w20191015_161430_083999/",
+    #arg_parser.add_argument("--data-dir", type=str, default="/home/suster/Apps/out/log_w20191015_161430_083999/",
+    arg_parser.add_argument("--data-dir", type=str, default="/nfshome/suster/Apps/out/log_w20191025_143451_929403_orig/",
                             help="path to folder to be analyzedd")
     args = arg_parser.parse_args()
 

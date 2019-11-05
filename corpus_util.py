@@ -689,7 +689,6 @@ class Nlp4plpCorpus:
         """
         Get predicate sequence type as a label
         """
-
         def get_outer_predicates(s):
             hits = re.findall(r"^(\w+)", s)
             assert len(hits) == 1, (s, inst.id)
@@ -701,6 +700,13 @@ class Nlp4plpCorpus:
         label = " ".join(predicates)
 
         return label
+
+    def get_n_full_label(self, inst):
+        """
+        Get full sequence type as a label
+        """
+        label = self.get_full_pl_label(inst)
+        return " ".join(label)
 
     def get_predicates_all_label(self, inst):
         """
@@ -888,6 +894,8 @@ class Nlp4plpCorpus:
             get_label = self.get_predicates_label
         elif label_type == "n-predicates":
             get_label = self.get_n_predicates_label
+        elif label_type == "n-full":
+            get_label = self.get_n_full_label
         elif label_type == "predicates-all":
             get_label = self.get_predicates_all_label
         elif label_type == "predicates-arguments-all":
@@ -925,7 +933,7 @@ class Nlp4plpCorpus:
                         inst.label = None
                     if len(inst.label2) > max_output_len:
                         inst.label2 = None
-            elif label_type == "n-predicates":
+            elif label_type in {"n-predicates", "n-full"}:
                 inst.ans_discrete = get_label(inst)
             else:
                 inst.label = get_label(inst)
@@ -1311,7 +1319,7 @@ class Nlp4plpEncDecEncoder(CorpusEncoder):
         # create vocabs
         # @todo: add min and max freq to vocab items
         vocab = Vocab.populate_indices(vocab_set, unk=UNK, pad=PAD)  # bos=BOS, eos=EOS, bol=BOL, eol=EOL),
-        label_vocab = Vocab.populate_indices(label_vocab_set, eos=EOS, pad=PAD, unk=UNK)
+        label_vocab = Vocab.populate_indices(label_vocab_set, eos=EOS, pad=PAD, unk=UNK, bos=BOS)
 
         return cls(vocab, label_vocab)
 
