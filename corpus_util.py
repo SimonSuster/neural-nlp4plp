@@ -56,7 +56,8 @@ class Vocab:
             setattr(cls, key,
                     inst.word2idx[sym])  # Add reserved symbols as class attributes with corresponding idx mapping
 
-        for term in vocab_set:
+        vocab_list = sorted(list(vocab_set))
+        for term in vocab_list:
             inst.word2idx.setdefault(term, len(inst.word2idx))
 
         inst.idx2word = {val: key for key, val in inst.word2idx.items()}

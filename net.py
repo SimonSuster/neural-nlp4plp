@@ -1481,7 +1481,7 @@ class EncoderDecoder(nn.Module):
         '''
         cur_batch_len = len(sent_lengths)
         beam_width = 10
-        topk = 1  # how many sentence do you want to generate
+        topk = 10  # how many sentence do you want to generate
         decoded_batch = []
 
         # decoding goes sentence by sentence
@@ -1504,7 +1504,7 @@ class EncoderDecoder(nn.Module):
 
             # starting node -  hidden vector, previous node, word id, logp, length
             node = BeamSearchNode(decoder_hidden, None, decoder_input_label, decoder_input, 0, 1)
-            nodes = PriorityQueue()
+            nodes = PriorityQueue()  # lowest prob first
 
             # start the queue
             nodes.put((-node.eval(), node))
@@ -1551,7 +1551,7 @@ class EncoderDecoder(nn.Module):
                     score, nn = nextnodes[i]
                     nodes.put((score, nn))
                     # increase qsize
-                qsize += len(nextnodes) - 1
+                qsize += len(nextnodes)# - 1
 
             # choose nbest paths, back trace them
             if len(endnodes) == 0:
@@ -1660,6 +1660,8 @@ class EncoderDecoder(nn.Module):
 
             print('ep %d, loss: %.3f, dev_acc: %.3f, dev_f1: %.3f' % (i, running_loss, dev_acc, dev_f1))
 
+        return best_acc
+
     def predict(self, corpus, feature_encoder, corpus_encoder, attention_plot=False, beam_decoding=False):
         self.eval()
         y_pred = list()
@@ -1704,6 +1706,8 @@ class EncoderDecoder(nn.Module):
         y_true = corpus_encoder.strip_until_eos(y_true)
         if not beam_decoding:
             y_pred = corpus_encoder.strip_until_eos(y_pred)
+        y_pred = [list(y) for y in y_pred]
+        y_true = [list(y) for y in y_true]
         return y_pred, y_true
 
     def save(self, f_model='lstm_encdec.tar', dir_model='../out/'):
@@ -2257,7 +2261,10 @@ class BeamSearchNode(object):
         self.leng = length
 
     def eval(self, alpha=1.0):
-        reward = 0
+        reward = 1
         # Add here a function for shaping a reward
 
         return self.logp / float(self.leng - 1 + 1e-6) + alpha * reward
+
+    def __lt__(self, other):
+        return True  # if probs the same

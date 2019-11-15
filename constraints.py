@@ -1,4 +1,5 @@
 import argparse
+import os
 import re
 from collections import Counter
 
@@ -30,6 +31,7 @@ class ConstraintStats:
     def __init__(self, data):
         self.data = data
         self.c = Counter()
+        self.c_f = Counter()
         n = len(data)
 
     def __str__(self):
@@ -38,19 +40,56 @@ class ConstraintStats:
     def get_all(self):
         self.c["N_is_integer"] = Counter()
         for d in self.data:
-            self.c["arity"] += self.arity(d)
-            self.c["N_is_integer"] += self.N_is_integer(d)
-            self.c["all_attr_vals_diff"] += self.all_attr_vals_diff(d)
-            self.c["repeated_statements"] += self.repeated_statements(d)
-            self.c["repeated_property_vals"] += self.repeated_property_vals(d)
+            c = self.arity(d)
+            self.c["arity"] += c
+            self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += c
+
+            c = self.N_is_integer(d)
+            self.c["N_is_integer"] += c
+            if len(c) != 0:
+                self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += sum(c.values())
+
+            c = self.all_attr_vals_diff(d)
+            self.c["all_attr_vals_diff"] += c
+            self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += c
+
+            c = self.repeated_statements(d)
+            self.c["repeated_statements"] += c
+            self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += c
+
+            c = self.repeated_property_vals(d)
+            self.c["repeated_property_vals"] += c
+            self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += c
+
             #self.c["givens_for_group"] += self.givens_for_group(d)
-            self.c["givens_property"] += self.givens_property(d)
-            self.c["min_one_prob"] += self.min_one_prob(d)
-            self.c["given_group"] += self.given_group(d)
-            self.c["dyn_set_group"] += self.dyn_set_group(d)
-            self.c["take_group"] += self.take_group(d)
-            self.c["take_args_diff"] += self.take_args_diff(d)
-            self.c["parenth"] += self.parenth(d)
+
+            c = self.givens_property(d)
+            self.c["givens_property"] += c
+            self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += c
+
+            c = self.min_one_prob(d)
+            self.c["min_one_prob"] += c
+            self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += c
+
+            c = self.given_group(d)
+            self.c["given_group"] += c
+            self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += c
+
+            c = self.dyn_set_group(d)
+            self.c["dyn_set_group"] += c
+            self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += c
+
+            c = self.take_group(d)
+            self.c["take_group"] += c
+            self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += c
+
+            c = self.take_args_diff(d)
+            self.c["take_args_diff"] += c
+            self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += c
+
+            c = self.parenth(d)
+            self.c["parenth"] += c
+            self.c_f[os.path.splitext(os.path.basename(d[0]))[0]] += c
 
     def arity(self, d):
         """
@@ -234,11 +273,11 @@ if __name__ == '__main__':
     arg_parser = argparse.ArgumentParser(description="")
     #arg_parser.add_argument("--data-dir", type=str, default="/home/suster/Apps/out/log_w20190906_001042_206510/",
     #arg_parser.add_argument("--data-dir", type=str, default="/home/suster/Apps/out/log_w20191015_161430_083999/",
-    arg_parser.add_argument("--data-dir", type=str, default="/nfshome/suster/Apps/out/log_w20191025_143451_929403_orig/",
-                            help="path to folder to be analyzedd")
+    #arg_parser.add_argument("--data-dir", type=str, default="/nfshome/suster/Apps/out/log_w20191025_143451_929403_orig/", help="path to folder to be analyzedd")
+    arg_parser.add_argument("--data-dir", type=str, default="/nfshome/suster/Apps/out/log_w20191108_093708_793772/")
     args = arg_parser.parse_args()
 
-    fs = get_file_list(args.data_dir, [".pl_p"])  # prediction files
+    fs = get_file_list(args.data_dir, [".pl_p0"])  # prediction files
     data = []
     for f in fs:
         with open(f) as fh:

@@ -1,11 +1,15 @@
+import os
 import re
+import subprocess
 from collections import Counter
 
 import numpy as np
-
-from corpus_util import Nlp4plpCorpus
-from util import load_json, f1_score
 from sklearn.metrics import accuracy_score, mean_absolute_error
+from tqdm import tqdm
+
+from constraints import ConstraintStats
+from corpus_util import Nlp4plpCorpus
+from util import load_json, f1_score, get_file_list
 
 
 class JsonPred:
@@ -141,7 +145,7 @@ def solver_report(f):
     return solver_dict, stat
 
 
-def main_solver():
+def main_solver(solver_output_f, test_dir="/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/test", convert_consts="no"):
     #solver_output_f = "/home/suster/Apps/out/log_w_gold_test/solver_output_pl_t"
     #test_corp = Nlp4plpCorpus(
     #    "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test",
@@ -180,10 +184,11 @@ def main_solver():
     #test_corp = Nlp4plpCorpus(
     #    "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test", convert_consts="no")
 
-    solver_output_f = "/home/suster/Apps/out/log_w20191104_210005_133239/solver_output_pl_p"
-    test_corp = Nlp4plpCorpus(
-        "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test", convert_consts="no")
+    #solver_output_f = "/home/suster/Apps/out/log_w20191105_133638_491720/solver_output_pl_p_nobeam"
+    #test_corp = Nlp4plpCorpus(
+    #    "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/nlp4plp/examples_splits_nums_mapped/" + "test", convert_consts="no")
 
+    test_corp = Nlp4plpCorpus(test_dir, convert_consts=convert_consts)
     test_dict = {inst.id: inst.ans for inst in test_corp.insts}
     solver_dict, stat = solver_report(solver_output_f)
     print(f"N errors: {len(solver_dict['errors'])}")
@@ -203,6 +208,37 @@ def main_solver():
     n_correct = acc*len(solver_dict['solved'])
     corr_acc = n_correct / (len(solver_dict['errors']) + len(solver_dict['solved']))
     print(f"corr acc: {corr_acc:.3f}")
+
+    constraint_stat = True
+    if constraint_stat:
+        correct_ids, incorrect_ids = [], []
+        for c, id in enumerate(common_ids):
+            if true_str[c] == pred_str[c]:
+                correct_ids.append(id)
+            else:
+                incorrect_ids.append(id)
+
+        #fs = get_file_list(os.path.basename(solver_output_f), [".pl_p0"])  # prediction files
+        fs_correct = [os.path.dirname(solver_output_f) + f"/{id}.pl_p0" for id in correct_ids]
+        fs_incorrect = [os.path.dirname(solver_output_f) + f"/{id}.pl_p0" for id in incorrect_ids]
+
+        data = []
+        print("\nconstraints for correct:")
+        for f in fs_correct:
+            with open(f) as fh:
+                data.append((f, fh.read().split()))
+        con = ConstraintStats(data)
+        con.get_all()
+        print(con)
+
+        data = []
+        print("\nconstraints for incorrect:")
+        for f in fs_incorrect:
+            with open(f) as fh:
+                data.append((f, fh.read().split()))
+        con = ConstraintStats(data)
+        con.get_all()
+        print(con)
 
     # non-zero output
     common_ids = test_dict.keys() & {k for k, v in solver_dict["solved"].items() if v != 0}
@@ -236,8 +272,95 @@ def main_test_train_comparison():
     train_corp.remove_none_labels()
     preds_in_gold(correct, train_corp)
 
+
+def eval_solver(dirname, backoff=False, backoff_constraint=False, beam_decoding=False):
+    """
+    :param backoff: backs off to k+1th beam candidate if solver p==0 or Error
+    :param backoff_constraint: backs off to k+1th beam candidate if a constraint is violated
+    :param beam_decoding: use the first-best if dealing with beam output, or backoff when backoff=True
+    """
+
+    def run_solver(f):
+        #print(f"***  INST:    {f}")
+        try:
+            out = subprocess.check_output(f"sh /home/suster/Apps/pietrototis/fork/nlp4plp/run/run.sh {f} {dirname}",
+                                          shell=True)
+            if backoff:
+                try:
+                    prob = float(out.decode("utf-8").strip().split("\t")[-1])
+                    if prob == 0.:
+                        #print("***0 PROB")
+                        id = eval(re.findall("_p(\d+)", f)[0])
+                        next_f = re.sub("_p(\d+)", f"_p{id + 1}", f)
+                        if os.path.exists(f"{dirname}/{next_f}"):
+                            #print(f"***backing off to {next_f} (0 PROB)")
+                            return run_solver(next_f)
+                        else:
+                            return out.decode("utf-8").replace("\t", " ").strip()
+                    else:
+                        #print(out.decode("utf-8").replace("\t", " ").strip())
+                        return out.decode("utf-8").replace("\t", " ").strip()
+                except ValueError:
+                    #print(f"ValueError: {out}")
+                    return out.decode("utf-8").replace("\t", " ").strip()
+            elif backoff_constraint:
+                with open(f"{dirname}/{f}") as fh:
+                    data = [(f, fh.read().split())]
+                con = ConstraintStats(data)
+                con.get_all()
+                if sum(con.c_f.values()) > 0:
+                    # constraint violated, try to move to next beam cand
+                    id = eval(re.findall("_p(\d+)", f)[0])
+                    next_f = re.sub("_p(\d+)", f"_p{id + 1}", f)
+                    if os.path.exists(f"{dirname}/{next_f}"):
+                        # print(f"***backing off to {next_f} (0 PROB)")
+                        return run_solver(next_f)
+                    else:
+                        return out.decode("utf-8").replace("\t", " ").strip()
+                else:
+                    return out.decode("utf-8").replace("\t", " ").strip()
+            else:
+                #print(out.decode("utf-8").replace("\t", " ").strip())
+                return out.decode("utf-8").replace("\t", " ").strip()
+        except subprocess.CalledProcessError as e:
+            _out = e.output.decode("utf-8").replace("\t", " ").strip()
+            if backoff:
+                id = eval(re.findall("_p(\d+)", f)[0])
+                next_f = re.sub("_p(\d+)", f"_p{id+1}", f)
+                if os.path.exists(f"{dirname}/{next_f}"):
+                    #print(f"backing off to {next_f}")
+                    return run_solver(next_f)
+                else:
+                    #print(_out)
+                    return _out
+            else:
+                return _out
+
+    print("Running solver...")
+    #dirname = os.path.abspath(f"../out/log_w{f_model}/")
+    if backoff or backoff_constraint:
+        assert beam_decoding
+    fs = get_file_list(dirname)
+    f_ending = ".pl_p0" if beam_decoding else ".pl_p"
+    fs = [os.path.basename(f) for f in fs if f.endswith(f_ending)]
+
+    report_f = f"{dirname}/solver_output_pl_p{'_beam' if beam_decoding else ''}{'_backoff' if backoff else ''}{'_backoff_constraint' if backoff_constraint else ''}"
+    with open(report_f, "w") as fh_out:
+        for f in tqdm(fs):
+            fh_out.write(f"=== Test {os.path.splitext(f)[0]} ===\n")
+            _out = run_solver(f)
+            fh_out.write(f'Solution: {_out}\n')
+            fh_out.write(f'Time: -\n')
+    # output solver result analysis
+    main_solver(report_f)
+
+
 if __name__ == '__main__':
-    main_solver()
+    #main_solver("/home/suster/Apps/out/log_w20191105_133638_491720/solver_output_pl_p_beam_backoff")
+    eval_solver("/nfshome/suster/Apps/out/log_w20191108_093708_793772/", backoff=False, backoff_constraint=False, beam_decoding=True)
+
+    #main_solver("/nfshome/suster/Apps/out/log_w20191108_093708_793772/solver_output_pl_p")
+    #main_solver("/home/suster/Apps/out/log_w20191105_133638_491720/solver_output_pl_p_nobeam")
 
     #main_test_train_comparison()
 

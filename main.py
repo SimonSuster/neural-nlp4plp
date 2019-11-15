@@ -2,11 +2,10 @@ import argparse
 import os
 import pickle
 import random
-import sys
-from collections import Counter
 from copy import deepcopy
 from datetime import datetime
 
+from analysis import eval_solver
 from pycocoevalcap.eval import COCOEvalCap
 from util import f1_score, FileUtils
 
@@ -73,7 +72,7 @@ def final_repl(n, num2n_map):
     return new_k
 
 
-def save_preds_encdec_pl(corp, _y_true, _y_pred, log_name, label_vocab=None, dir_out="../out/"):
+def save_preds_encdec_pl(corp, _y_true, _y_pred, log_name, label_vocab=None, dir_out="../out/", beam_decoding=False):
     """ as a prolog program """
     print("Saving predictions from the best model:")
     dir_out = f"{dir_out}log_w{log_name}/"
@@ -81,21 +80,39 @@ def save_preds_encdec_pl(corp, _y_true, _y_pred, log_name, label_vocab=None, dir
     if not os.path.exists(dir_out):
         os.makedirs(dir_out)
     for c, (y_t, y_p) in enumerate(zip(_y_true, _y_pred)):
+        # gold
         f_name_t = os.path.basename(corp.insts[c].f + "_t")
-        f_name_p = os.path.basename(corp.insts[c].f + "_p")
-        with open(dir_out + f_name_t, "w") as f_out_t, open(dir_out + f_name_p, "w") as f_out_p:
+        with open(dir_out + f_name_t, "w") as f_out_t:
             y_t = list(y_t)
-            y_p = list(y_p)
             if label_vocab is not None:
                 t = [label_vocab.idx2word[y] for y in y_t]
-                p = [label_vocab.idx2word[y] for y in y_p]
             else:
                 t = y_t
-                p = y_p
             t = final_repl(t, corp.insts[c].num2n_map)
-            p = final_repl(p, corp.insts[c].num2n_map)
             f_out_t.write(t)
-            f_out_p.write(p)
+
+        # preds
+        if beam_decoding:
+            for k, _y_p in enumerate(y_p):
+                _y_p = list(_y_p)
+                f_name_p = os.path.basename(corp.insts[c].f + f"_p{k}")
+                with open(dir_out + f_name_p, "w") as f_out_p:
+                    if label_vocab is not None:
+                        p = [label_vocab.idx2word[y] for y in _y_p]
+                    else:
+                        p = _y_p
+                    p = final_repl(p, corp.insts[c].num2n_map)
+                    f_out_p.write(p)
+        else:
+            f_name_p = os.path.basename(corp.insts[c].f + f"_p")
+            with open(dir_out + f_name_p, "w") as f_out_p:
+                _y_p = list(y_p)
+                if label_vocab is not None:
+                    p = [label_vocab.idx2word[y] for y in _y_p]
+                else:
+                    p = _y_p
+                p = final_repl(p, corp.insts[c].num2n_map)
+                f_out_p.write(p)
 
 
 def inspect_encdec(corp, label_vocab, _y_true, _y_pred):
@@ -164,11 +181,11 @@ def main():
                                  "**mod5**: parent feeding (in out)\n/"
                                  "**mod6**: parent feeding (in attention)")
     arg_parser.add_argument("--convert-consts", type=str, help="conv | our-map | no-our-map | no. \n/"
-                                                                              "conv-> txt: -; stats: num_sym+ent_sym.\n/"
-                                                                              "our-map-> txt: num_sym; stats: num_sym(from map)+ent_sym;\n/"
-                                                                              "no-our-map-> txt: -; stats: num_sym(from map)+ent_sym;\n/"
-                                                                              "no-> txt: -; stats: -, only ent_sym;\n/"
-                                                                              "no-ent-> txt: -; stats: -, no ent_sym;\n/")
+                                                               "conv-> txt: -; stats: num_sym+ent_sym.\n/"
+                                                               "our-map-> txt: num_sym; stats: num_sym(from map)+ent_sym;\n/"
+                                                               "no-our-map-> txt: -; stats: num_sym(from map)+ent_sym;\n/"
+                                                               "no-> txt: -; stats: -, only ent_sym;\n/"
+                                                               "no-ent-> txt: -; stats: -, no ent_sym;\n/")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="",
                             help="path to folder from where data is loaded. Subfolder should be train/dev/test")
@@ -193,6 +210,7 @@ def main():
                             help="Maximum decoding length for EncDec models at prediction time.")
     model_names = "lstm-enc-discrete-dec | lstm-enc-regression-dec | lstm-enc-pointer-dec | lstm-enc-dec | lstm-enc-split-dec"
     arg_parser.add_argument("--model", type=str, help=f"{model_names}")
+    arg_parser.add_argument("--model-path", type=str, help=f"saved model file to load")
     arg_parser.add_argument("--n-bins", type=int, default=10, help="number of bins for discretization of answers")
     arg_parser.add_argument("--n-layers", type=int, default=1, help="number of layers for the RNN")
     arg_parser.add_argument("--n-runs", type=int, default=5, help="number of runs to average over the results")
@@ -201,8 +219,14 @@ def main():
     arg_parser.add_argument("--pretrained-emb-path", type=str,
                             help="path to the txt file with word embeddings")
     arg_parser.add_argument("--print-correct", action="store_true")
-    arg_parser.add_argument("--ret-period", type=int, default=20, help="stop training if no improvement in both acc and f1 during last 'ret-period' epochs")
+    arg_parser.add_argument("--ret-period", type=int, default=20,
+                            help="stop training if no improvement in both acc and f1 during last 'ret-period' epochs")
+    arg_parser.add_argument("--run-solver", action="store_true")
     arg_parser.add_argument("--save-model", action="store_true")
+    arg_parser.add_argument("--solver-backoff", action="store_true",
+                            help="evaluates k+1th sequence from the beam if kth resulted in an error/0 output")
+    arg_parser.add_argument("--solver-backoff-constraint", action="store_true",
+                            help="evaluates k+1th sequence from the beam if kth violates a constraint")
     # arg_parser.add_argument("--test", type=int, default=1)
     # arg_parser.add_argument("--train", type=int, default=1)
     args = arg_parser.parse_args()
@@ -290,253 +314,278 @@ def main():
     if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
         test_score_f1_runs = []
         test_score_bleu4_runs = []
-    for n in range(args.n_runs):
-        if args.model == "lstm-enc-discrete-dec":
-            # initialize vocab
-            corpus_encoder = Nlp4plpEncoder.from_corpus(train_corp, dev_corp)
-            f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
-            print(f"f_model: {f_model}")
-            net_params = {'n_layers': args.n_layers,
-                          'hidden_dim': args.hidden_dim,
-                          'vocab_size': corpus_encoder.vocab.size,
-                          'padding_idx': corpus_encoder.vocab.pad,
-                          'label_padding_idx': corpus_encoder.label_vocab.pad,
-                          'embedding_dim': args.embed_size,
-                          'dropout': args.dropout,
-                          'label_size': len(corpus_encoder.label_vocab),
-                          'batch_size': args.batch_size,
-                          'word_idx': corpus_encoder.vocab.word2idx,
-                          'pretrained_emb_path': args.pretrained_emb_path,
-                          'f_model': f_model,
-                          'cuda': args.cuda
-                          }
-            classifier = LSTMClassifier(**net_params)
-            eval_score = accuracy_score
-        elif args.model == "lstm-enc-regression-dec":
-            # initialize vocab
-            corpus_encoder = Nlp4plpRegressionEncoder.from_corpus(train_corp, dev_corp)
-            f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
-            print(f"f_model: {f_model}")
-            net_params = {'n_layers': args.n_layers,
-                          'hidden_dim': args.hidden_dim,
-                          'vocab_size': corpus_encoder.vocab.size,
-                          'padding_idx': corpus_encoder.vocab.pad,
-                          'embedding_dim': args.embed_size,
-                          'dropout': args.dropout,
-                          'batch_size': args.batch_size,
-                          'word_idx': corpus_encoder.vocab.word2idx,
-                          'pretrained_emb_path': args.pretrained_emb_path,
-                          'f_model': f_model,
-                          'cuda': args.cuda
+        dev_score_runs = []
+    # train models
+    if args.model_path is None:
+        for n in range(args.n_runs):
+            if args.model == "lstm-enc-discrete-dec":
+                # initialize vocab
+                corpus_encoder = Nlp4plpEncoder.from_corpus(train_corp, dev_corp)
+                f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+                print(f"f_model: {f_model}")
+                net_params = {'n_layers': args.n_layers,
+                              'hidden_dim': args.hidden_dim,
+                              'vocab_size': corpus_encoder.vocab.size,
+                              'padding_idx': corpus_encoder.vocab.pad,
+                              'label_padding_idx': corpus_encoder.label_vocab.pad,
+                              'embedding_dim': args.embed_size,
+                              'dropout': args.dropout,
+                              'label_size': len(corpus_encoder.label_vocab),
+                              'batch_size': args.batch_size,
+                              'word_idx': corpus_encoder.vocab.word2idx,
+                              'pretrained_emb_path': args.pretrained_emb_path,
+                              'f_model': f_model,
+                              'cuda': args.cuda
+                              }
+                classifier = LSTMClassifier(**net_params)
+                eval_score = accuracy_score
+            elif args.model == "lstm-enc-regression-dec":
+                # initialize vocab
+                corpus_encoder = Nlp4plpRegressionEncoder.from_corpus(train_corp, dev_corp)
+                f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+                print(f"f_model: {f_model}")
+                net_params = {'n_layers': args.n_layers,
+                              'hidden_dim': args.hidden_dim,
+                              'vocab_size': corpus_encoder.vocab.size,
+                              'padding_idx': corpus_encoder.vocab.pad,
+                              'embedding_dim': args.embed_size,
+                              'dropout': args.dropout,
+                              'batch_size': args.batch_size,
+                              'word_idx': corpus_encoder.vocab.word2idx,
+                              'pretrained_emb_path': args.pretrained_emb_path,
+                              'f_model': f_model,
+                              'cuda': args.cuda
 
-                          }
-            classifier = LSTMRegression(**net_params)
-            eval_score = mean_absolute_error
-        elif args.model == "lstm-enc-pointer-dec":
-            # initialize vocab
-            corpus_encoder = Nlp4plpPointerNetEncoder.from_corpus(train_corp, dev_corp)
-            f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
-            print(f"f_model: {f_model}")
-            net_params = {'n_layers': args.n_layers,
-                          'hidden_dim': args.hidden_dim,
-                          'vocab_size': corpus_encoder.vocab.size,
-                          'padding_idx': corpus_encoder.vocab.pad,
-                          'embedding_dim': args.embed_size,
-                          'dropout': args.dropout,
-                          'batch_size': args.batch_size,
-                          'word_idx': corpus_encoder.vocab.word2idx,
-                          'pretrained_emb_path': args.pretrained_emb_path,
-                          'output_len': int(args.label_type[-1]) if "declen" in args.label_type else 1,
-                          # decoder output length
-                          'f_model': f_model,
-                          'bidir': args.bidir,
-                          'cuda': args.cuda
-                          }
-            if args.feat_type:
-                feature_encoder = Nlp4plpPointerNetEncoder.feature_from_corpus(train_corp, dev_corp,
-                                                                               feat_type=args.feat_type)
-                net_params['feature_idx'] = feature_encoder.vocab.word2idx
-                net_params['feat_size'] = feature_encoder.vocab.size
-                net_params['feat_padding_idx'] = feature_encoder.vocab.pad
-                net_params['feat_emb_dim'] = args.feat_embed_size
+                              }
+                classifier = LSTMRegression(**net_params)
+                eval_score = mean_absolute_error
+            elif args.model == "lstm-enc-pointer-dec":
+                # initialize vocab
+                corpus_encoder = Nlp4plpPointerNetEncoder.from_corpus(train_corp, dev_corp)
+                f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+                print(f"f_model: {f_model}")
+                net_params = {'n_layers': args.n_layers,
+                              'hidden_dim': args.hidden_dim,
+                              'vocab_size': corpus_encoder.vocab.size,
+                              'padding_idx': corpus_encoder.vocab.pad,
+                              'embedding_dim': args.embed_size,
+                              'dropout': args.dropout,
+                              'batch_size': args.batch_size,
+                              'word_idx': corpus_encoder.vocab.word2idx,
+                              'pretrained_emb_path': args.pretrained_emb_path,
+                              'output_len': int(args.label_type[-1]) if "declen" in args.label_type else 1,
+                              # decoder output length
+                              'f_model': f_model,
+                              'bidir': args.bidir,
+                              'cuda': args.cuda
+                              }
+                if args.feat_type:
+                    feature_encoder = Nlp4plpPointerNetEncoder.feature_from_corpus(train_corp, dev_corp,
+                                                                                   feat_type=args.feat_type)
+                    net_params['feature_idx'] = feature_encoder.vocab.word2idx
+                    net_params['feat_size'] = feature_encoder.vocab.size
+                    net_params['feat_padding_idx'] = feature_encoder.vocab.pad
+                    net_params['feat_emb_dim'] = args.feat_embed_size
 
-            classifier = PointerNet(**net_params)
-            eval_score = accuracy_score
-        elif args.model == "lstm-enc-dec":
-            # initialize vocab
-            corpus_encoder = Nlp4plpEncDecEncoder.from_corpus(train_corp, dev_corp)
-            # print(corpus_encoder.label_vocab.to_dict()["word2idx"])
-            print(f"n labels: {len(corpus_encoder.label_vocab)}")
-            print(corpus_encoder.label_vocab.word2idx)
-            # max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
-            f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
-            print(f"f_model: {f_model}")
-            net_params = {'n_layers': args.n_layers,
-                      'hidden_dim': args.hidden_dim,
-                      'vocab_size': corpus_encoder.vocab.size,
-                      'padding_idx': corpus_encoder.vocab.pad,
-                      'label_padding_idx': corpus_encoder.label_vocab.pad,
-                      'embedding_dim': args.embed_size,
-                      'dropout': args.dropout,
-                      'batch_size': args.batch_size,
-                      'word_idx': corpus_encoder.vocab.word2idx,
-                      'label_idx': corpus_encoder.label_vocab.word2idx,
-                      'pretrained_emb_path': args.pretrained_emb_path,
-                      'max_output_len': args.max_output_len,
-                      'label_size': len(corpus_encoder.label_vocab),
-                      'f_model': f_model,
-                      'bidir': args.bidir,
-                      'bert_embs': bert_embs if args.bert else None,
-                      'constrained_decoding': args.constrained_decoding,
-                      'cuda': args.cuda
-            }
-            if args.feat_type:
-                feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
-                net_params['feature_idx'] = feature_encoder.vocab.word2idx
-                net_params['feat_size'] = feature_encoder.vocab.size
-                net_params['feat_padding_idx'] = feature_encoder.vocab.pad
-                net_params['feat_emb_dim'] = args.feat_embed_size
-                net_params['feat_type'] = args.feat_type
-                net_params['feat_onehot'] = args.feat_onehot
+                classifier = PointerNet(**net_params)
+                eval_score = accuracy_score
+            elif args.model == "lstm-enc-dec":
+                # initialize vocab
+                corpus_encoder = Nlp4plpEncDecEncoder.from_corpus(train_corp, dev_corp)
+                # print(corpus_encoder.label_vocab.to_dict()["word2idx"])
+                print(f"n labels: {len(corpus_encoder.label_vocab)}")
+                print(corpus_encoder.label_vocab.word2idx)
+                # max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
+                f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+                print(f"f_model: {f_model}")
+                net_params = {'n_layers': args.n_layers,
+                              'hidden_dim': args.hidden_dim,
+                              'vocab_size': corpus_encoder.vocab.size,
+                              'padding_idx': corpus_encoder.vocab.pad,
+                              'label_padding_idx': corpus_encoder.label_vocab.pad,
+                              'embedding_dim': args.embed_size,
+                              'dropout': args.dropout,
+                              'batch_size': args.batch_size,
+                              'word_idx': corpus_encoder.vocab.word2idx,
+                              'label_idx': corpus_encoder.label_vocab.word2idx,
+                              'pretrained_emb_path': args.pretrained_emb_path,
+                              'max_output_len': args.max_output_len,
+                              'label_size': len(corpus_encoder.label_vocab),
+                              'f_model': f_model,
+                              'bidir': args.bidir,
+                              'bert_embs': bert_embs if args.bert else None,
+                              'constrained_decoding': args.constrained_decoding,
+                              'cuda': args.cuda
+                              }
+                if args.feat_type:
+                    feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
+                    net_params['feature_idx'] = feature_encoder.vocab.word2idx
+                    net_params['feat_size'] = feature_encoder.vocab.size
+                    net_params['feat_padding_idx'] = feature_encoder.vocab.pad
+                    net_params['feat_emb_dim'] = args.feat_embed_size
+                    net_params['feat_type'] = args.feat_type
+                    net_params['feat_onehot'] = args.feat_onehot
 
-            classifier = EncoderDecoder(**net_params)
-            eval_score = accuracy_score
-        elif args.model == "lstm-enc-split-dec":
-            # initialize vocab
-            corpus_encoder = Nlp4plpEncSplitDecEncoder.from_corpus(train_corp, dev_corp)
-            # print(corpus_encoder.label_vocab.to_dict()["word2idx"])
-            print(f"n labels: {len(corpus_encoder.label_vocab)}")
-            print(f"n labels2: {len(corpus_encoder.label_vocab2)}")
-            # max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
-            f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
-            print(f"f_model: {f_model}")
-            net_params = {'n_layers': args.n_layers,
-                          'hidden_dim': args.hidden_dim,
-                          'vocab_size': corpus_encoder.vocab.size,
-                          'padding_idx': corpus_encoder.vocab.pad,
-                          'label_padding_idx': corpus_encoder.label_vocab.pad,
-                          'label_padding_idx2': corpus_encoder.label_vocab2.pad,
-                          'embedding_dim': args.embed_size,
-                          'dropout': args.dropout,
-                          'batch_size': args.batch_size,
-                          'word_idx': corpus_encoder.vocab.word2idx,
-                          'label_idx': corpus_encoder.label_vocab.word2idx,
-                          'label_idx2': corpus_encoder.label_vocab2.word2idx,
-                          'pretrained_emb_path': args.pretrained_emb_path,
-                          'max_output_len': args.max_output_len,
-                          'label_size': len(corpus_encoder.label_vocab),
-                          'label_size2': len(corpus_encoder.label_vocab2),
-                          'f_model': f_model,
-                          'bidir': args.bidir,
-                          'bert_embs': bert_embs if args.bert else None,
-                          'oracle_dec1': args.oracle_dec1,
-                          'constrained_decoding': args.constrained_decoding,
-                          'label_type_dec': args.label_type_dec,
-                          'cuda': args.cuda
-                          }
-            if args.feat_type:
-                feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
-                net_params['feature_idx'] = feature_encoder.vocab.word2idx
-                net_params['feat_size'] = feature_encoder.vocab.size
-                net_params['feat_padding_idx'] = feature_encoder.vocab.pad
-                net_params['feat_emb_dim'] = args.feat_embed_size
-                net_params['feat_type'] = args.feat_type
-                net_params['feat_onehot'] = args.feat_onehot
+                classifier = EncoderDecoder(**net_params)
+                eval_score = accuracy_score
+            elif args.model == "lstm-enc-split-dec":
+                # initialize vocab
+                corpus_encoder = Nlp4plpEncSplitDecEncoder.from_corpus(train_corp, dev_corp)
+                # print(corpus_encoder.label_vocab.to_dict()["word2idx"])
+                print(f"n labels: {len(corpus_encoder.label_vocab)}")
+                print(f"n labels2: {len(corpus_encoder.label_vocab2)}")
+                # max_output_len = max([len(inst.label) for inst in train_corp.insts + dev_corp.insts])
+                f_model = f'{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+                print(f"f_model: {f_model}")
+                net_params = {'n_layers': args.n_layers,
+                              'hidden_dim': args.hidden_dim,
+                              'vocab_size': corpus_encoder.vocab.size,
+                              'padding_idx': corpus_encoder.vocab.pad,
+                              'label_padding_idx': corpus_encoder.label_vocab.pad,
+                              'label_padding_idx2': corpus_encoder.label_vocab2.pad,
+                              'embedding_dim': args.embed_size,
+                              'dropout': args.dropout,
+                              'batch_size': args.batch_size,
+                              'word_idx': corpus_encoder.vocab.word2idx,
+                              'label_idx': corpus_encoder.label_vocab.word2idx,
+                              'label_idx2': corpus_encoder.label_vocab2.word2idx,
+                              'pretrained_emb_path': args.pretrained_emb_path,
+                              'max_output_len': args.max_output_len,
+                              'label_size': len(corpus_encoder.label_vocab),
+                              'label_size2': len(corpus_encoder.label_vocab2),
+                              'f_model': f_model,
+                              'bidir': args.bidir,
+                              'bert_embs': bert_embs if args.bert else None,
+                              'oracle_dec1': args.oracle_dec1,
+                              'constrained_decoding': args.constrained_decoding,
+                              'label_type_dec': args.label_type_dec,
+                              'cuda': args.cuda
+                              }
+                if args.feat_type:
+                    feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
+                    net_params['feature_idx'] = feature_encoder.vocab.word2idx
+                    net_params['feat_size'] = feature_encoder.vocab.size
+                    net_params['feat_padding_idx'] = feature_encoder.vocab.pad
+                    net_params['feat_emb_dim'] = args.feat_embed_size
+                    net_params['feat_type'] = args.feat_type
+                    net_params['feat_onehot'] = args.feat_onehot
 
-            classifier = EncoderSplitDecoder(**net_params)
-            eval_score = accuracy_score
+                classifier = EncoderSplitDecoder(**net_params)
+                eval_score = accuracy_score
 
+            else:
+                raise ValueError(f"Model should be '{model_names}'")
+
+            optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
+
+            print(os.path.abspath('../out/' + classifier.f_model))
+            best_dev_score = classifier.train_model(train_corp, dev_corp, corpus_encoder, feature_encoder, args.epochs, args.ret_period,
+                                   optimizer)
+            dev_score_runs.append((best_dev_score, f_model))
+
+        print(f"Finished training. Best dev score and model: {sorted(dev_score_runs, reverse=True)[0]}")
+        print(f"All dev scores and models: {dev_score_runs}")
+
+    # load best model
+    if args.model == 'lstm-enc-discrete-dec':
+        classifier = LSTMClassifier.load(f_model=net_params['f_model'])
+    elif args.model == 'lstm-enc-regression-dec':
+        classifier = LSTMRegression.load(f_model=net_params['f_model'])
+    elif args.model == 'lstm-enc-pointer-dec':
+        classifier = PointerNet.load(f_model=net_params['f_model'])
+    elif args.model == 'lstm-enc-dec':
+        if args.model_path is None:
+            model_path = sorted(dev_score_runs, reverse=True)[0][1]
         else:
-            raise ValueError(f"Model should be '{model_names}'")
+            model_path = args.model_path
+        corpus_encoder = Nlp4plpEncDecEncoder.from_corpus(train_corp, dev_corp)
+        if args.feat_type:
+            feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
+        eval_score = accuracy_score
+        classifier = EncoderDecoder.load(f_model=model_path)
+        assert classifier.word_idx == corpus_encoder.vocab.word2idx
+        assert classifier.label_idx == corpus_encoder.label_vocab.word2idx, (
+        classifier.label_idx, corpus_encoder.label_vocab.word2idx)
+    elif args.model == 'lstm-enc-split-dec':
+        classifier = EncoderSplitDecoder.load(f_model=net_params['f_model'])
+    else:
+        raise ValueError(f"Model should be '{model_names}'")
 
-        optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
+    # get predictions
+    if args.model == "lstm-enc-split-dec":
+        _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(test_corp, feature_encoder,
+                                                                                        corpus_encoder,
+                                                                                        args.attention_plot)
+        y_pred1 = [str(y) for y in _y_pred1]
+        y_pred2 = [str(y) for y in _y_pred2]
+        y_true1 = [str(y) for y in _y_true1]
+        y_true2 = [str(y) for y in _y_true2]
+    else:
+        _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder, args.attention_plot,
+                                              args.beam_decoding)
 
-        print(os.path.abspath('../out/' + classifier.f_model))
-        classifier.train_model(train_corp, dev_corp, corpus_encoder, feature_encoder, args.epochs, args.ret_period, optimizer)
+    # for accuracy calculation
+    if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:  # or net_params["output_len"] > 1:
+        y_true = [str(y) for y in _y_true]
+        if args.beam_decoding:
+            _y_pred_all = _y_pred
+            # 1st best
+            _y_pred = [preds[0] for preds in _y_pred]
+        y_pred = [str(y) for y in _y_pred]
+    else:
+        y_true = _y_true
+        y_pred = _y_pred
 
-
-        # load model
-        if args.model == 'lstm-enc-discrete-dec':
-            classifier = LSTMClassifier.load(f_model=net_params['f_model'])
-        elif args.model == 'lstm-enc-regression-dec':
-            classifier = LSTMRegression.load(f_model=net_params['f_model'])
-        elif args.model == 'lstm-enc-pointer-dec':
-            classifier = PointerNet.load(f_model=net_params['f_model'])
-        elif args.model == 'lstm-enc-dec':
-            classifier = EncoderDecoder.load(f_model=net_params['f_model'])
-        elif args.model == 'lstm-enc-split-dec':
-            classifier = EncoderSplitDecoder.load(f_model=net_params['f_model'])
-        else:
-            raise ValueError(f"Model should be '{model_names}'")
-
-        # get predictions
-        if args.model == "lstm-enc-split-dec":
-            _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(test_corp, feature_encoder,
-                                                                                            corpus_encoder, args.attention_plot)
-            y_pred1 = [str(y) for y in _y_pred1]
-            y_pred2 = [str(y) for y in _y_pred2]
-            y_true1 = [str(y) for y in _y_true1]
-            y_true2 = [str(y) for y in _y_true2]
-        else:
-            _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder, args.attention_plot, args.beam_decoding)
-
-        # for accuracy calculation
-        if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}: # or net_params["output_len"] > 1:
-            y_true = [str(y) for y in _y_true]
-            if args.beam_decoding:
-                # 1st best
-                _y_pred = [preds[0] for preds in _y_pred]
-            y_pred = [str(y) for y in _y_pred]
-        else:
-            y_true = _y_true
-            y_pred = _y_pred
-
-        # compute scoring metrics
-        test_acc = eval_score(y_true=y_true, y_pred=y_pred)
-        if args.oracle_dec1:
-            test_acc1 = accuracy_score(y_true=y_true1, y_pred=y_pred1)
-            test_acc2 = accuracy_score(y_true=y_true2, y_pred=y_pred2)
-            print(f"acc dec1: {test_acc1}, acc dec2: {test_acc2}")
-        if not args.print_correct and (args.model == "lstm-enc-discrete-dec" and args.label_type_dec not in {"n-predicates", "n-full"}):
-            correct = get_correct_problems(test_corp, y_pred, test_corp.fitted_discretizer.bin_edges_[0])
-            print(correct)
-        if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
-            test_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
-            y_true_dict = {c: [" ".join([str(i) for i in t])] for c, t in enumerate(_y_true)}
-            y_pred_dict = {c: [" ".join([str(i) for i in p])] for c, p in enumerate(_y_pred)}
-            test_coco_eval = COCOEvalCap(y_true_dict, y_pred_dict)
-            test_coco_eval.evaluate()
-            test_coco = test_coco_eval.eval
-            test_bleu4 = test_coco["Bleu_4"]
-            print('TEST SCORE: acc: %.3f, f1: %.3f, bleu4: %.3f, total: %i' % (
+    # compute scoring metrics
+    test_acc = eval_score(y_true=y_true, y_pred=y_pred)
+    if args.oracle_dec1:
+        test_acc1 = accuracy_score(y_true=y_true1, y_pred=y_pred1)
+        test_acc2 = accuracy_score(y_true=y_true2, y_pred=y_pred2)
+        print(f"acc dec1: {test_acc1}, acc dec2: {test_acc2}")
+    if not args.print_correct and (
+            args.model == "lstm-enc-discrete-dec" and args.label_type_dec not in {"n-predicates", "n-full"}):
+        correct = get_correct_problems(test_corp, y_pred, test_corp.fitted_discretizer.bin_edges_[0])
+        print(correct)
+    if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
+        test_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
+        y_true_dict = {c: [" ".join([str(i) for i in t])] for c, t in enumerate(_y_true)}
+        y_pred_dict = {c: [" ".join([str(i) for i in p])] for c, p in enumerate(_y_pred)}
+        test_coco_eval = COCOEvalCap(y_true_dict, y_pred_dict)
+        test_coco_eval.evaluate()
+        test_coco = test_coco_eval.eval
+        test_bleu4 = test_coco["Bleu_4"]
+        print('TEST SCORE: acc: %.3f, f1: %.3f, bleu4: %.3f, total: %i' % (
             test_acc, test_f1, test_bleu4, len(y_pred)))
-            test_score_runs.append(test_acc)
-            test_score_f1_runs.append(test_f1)
-            test_score_bleu4_runs.append(test_bleu4)
-        else:
-            print('TEST SCORE: %.3f' % test_acc)
-            test_score_runs.append(test_acc)
+        test_score_runs.append(test_acc)
+        test_score_f1_runs.append(test_f1)
+        test_score_bleu4_runs.append(test_bleu4)
+    else:
+        print('TEST SCORE: %.3f' % test_acc)
+        test_score_runs.append(test_acc)
+
+    if args.inspect:
+        if args.model_path is not None or args.save_model:
+            if args.label_type_dec == "full-pl":
+                save_preds_encdec_pl(test_corp,
+                                     _y_true,
+                                     _y_pred_all if args.beam_decoding else _y_pred,
+                                     classifier.f_model,
+                                     label_vocab=corpus_encoder.label_vocab,
+                                     beam_decoding=args.beam_decoding)
+                if args.run_solver:
+                    eval_solver(os.path.abspath(f"../out/log_w{classifier.f_model}/"), backoff=args.solver_backoff,
+                                backoff_constraint=args.solver_backoff_constraint, beam_decoding=args.beam_decoding)
+            elif args.label_type_dec in {"full-pl-split", "full-pl-split-stat-dyn"}:
+                save_preds_encdec_pl(test_corp, _y_true, _y_pred, classifier.f_model)
+    if not args.save_model:
+        classifier.remove(f_model=classifier.f_model)
+
     if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
         print('AVG TEST SCORE over %d runs: %.3f, f1: %.3f, bleu4: %.3f' % (
             args.n_runs, np.mean(test_score_runs), np.mean(test_score_f1_runs), np.mean(test_score_bleu4_runs)))
     else:
         print('AVG TEST SCORE over %d runs: %.3f' % (args.n_runs, np.mean(test_score_runs)))
 
-    if args.inspect:
-        # inspect(test_corp, _y_true, _y_pred)
-        # get dev predictions
-        #if args.model == "lstm-enc-split-dec":
-        #    _y_pred, _y_true, (_y_pred1, _y_pred2, _y_true1, _y_true2) = classifier.predict(test_corp, feature_encoder,
-        #                                                                                    corpus_encoder)
-        #else:
-        #    _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder)
-        if args.save_model:
-            if args.label_type_dec == "full-pl":
-                save_preds_encdec_pl(test_corp, _y_true, _y_pred, f_model, label_vocab=corpus_encoder.label_vocab)
-            elif args.label_type_dec in {"full-pl-split", "full-pl-split-stat-dyn"}:
-                save_preds_encdec_pl(test_corp, _y_true, _y_pred, f_model)
-    if not args.save_model:
-        classifier.remove(f_model=classifier.f_model)
 
 
 if __name__ == '__main__':
