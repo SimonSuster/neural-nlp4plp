@@ -28,7 +28,8 @@ from sklearn.metrics import accuracy_score, mean_squared_error
 from util import TorchUtils, load_emb, f1_score, load_bert
 from corpus_util import STAT, DYN
 
-#import matplotlib.pyplot as plt
+
+# import matplotlib.pyplot as plt
 
 
 class Encoder(nn.Module):
@@ -88,6 +89,26 @@ class Encoder(nn.Module):
                             dropout=self.dropout, bidirectional=self.bidir)  # lstm layers
         self.to(self.device)
 
+    def embedded_dropout(self, embed, words, dropout=0.1, scale=None):
+        if dropout:
+            mask = embed.weight.data.new().resize_((embed.weight.size(0), 1)).bernoulli_(1 - dropout).expand_as(
+                embed.weight) / (1 - dropout)
+            masked_embed_weight = mask * embed.weight
+        else:
+            masked_embed_weight = embed.weight
+        if scale:
+            masked_embed_weight = scale.expand_as(masked_embed_weight) * masked_embed_weight
+
+        padding_idx = embed.padding_idx
+        if padding_idx is None:
+            padding_idx = -1
+
+        X = torch.nn.functional.embedding(words, masked_embed_weight,
+                                          padding_idx, embed.max_norm, embed.norm_type,
+                                          embed.scale_grad_by_freq, embed.sparse
+                                          )
+        return X
+
     def init_hidden(self):
         '''
         initializes hidden and cell states to zero for the first input
@@ -111,8 +132,9 @@ class Encoder(nn.Module):
 
         return z
 
-    def forward(self, sentence, features, sent_lengths, hidden):
+    def forward(self, sentence, features, sent_lengths, hidden, training):
         sort, unsort = TorchUtils.get_sort_unsort(sent_lengths)
+        # embs = self.embedded_dropout(self.word_embeddings, sentence, dropout=0.3 if training else 0., scale=None)  # word sequence to embedding sequence
         embs = self.word_embeddings(sentence).to(self.device)  # word sequence to embedding sequence
         if features is not None:
             # concatenate for all feat types
@@ -1314,13 +1336,13 @@ def write_att_plots(cur_insts, word_idx, labels, label_idx, outputs_att, log_nam
     if not os.path.exists(dir_out):
         os.makedirs(dir_out)
 
-    inv_label_idx = {v: k for k,v in label_idx.items()}
+    inv_label_idx = {v: k for k, v in label_idx.items()}
     inv_word_idx = {v: k for k, v in word_idx.items()}
 
     n = outputs_att.shape[0]
     for k in range(n):
-        ws = ["<s>"]+[inv_word_idx[idx.item()] for idx in cur_insts[:, k]]
-        ls = ["<s>"]+[inv_label_idx[idx.item()] for idx in labels[k, :]]
+        ws = ["<s>"] + [inv_word_idx[idx.item()] for idx in cur_insts[:, k]]
+        ls = ["<s>"] + [inv_label_idx[idx.item()] for idx in labels[k, :]]
 
         fig = plt.figure(figsize=(12, 22))
         ax = fig.add_subplot(111)
@@ -1429,7 +1451,7 @@ class EncoderDecoder(nn.Module):
 
     #    def forward(self, inputs):
     def forward(self, sentence, features, sent_lengths, output_length=None, cur_labels=None, cur_max_nsymbs=None,
-                attention_plot=False, beam_decoding=False):
+                attention_plot=False, beam_decoding=False, beam_width=10, beam_topk=10):
         # input_length = inputs.size(1)
         cur_batch_len = len(sent_lengths)
         decoder_input0 = self.decoder_input0.unsqueeze(0).expand(cur_batch_len, -1)
@@ -1439,7 +1461,7 @@ class EncoderDecoder(nn.Module):
 
         enc_hidden0 = self.encoder.init_hidden()
         # encoder_outputs, encoder_hidden = self.encoder(embedded_inputs, enc_hidden0)
-        encoder_outputs, encoder_hidden = self.encoder(sentence, features, sent_lengths, enc_hidden0)
+        encoder_outputs, encoder_hidden = self.encoder(sentence, features, sent_lengths, enc_hidden0, self.training)
         encoder_outputs = encoder_outputs.permute(1, 0, 2)
         if self.bidir:
             decoder_hidden0 = (torch.cat(tuple(encoder_hidden[0][-2:]), dim=-1),
@@ -1455,11 +1477,17 @@ class EncoderDecoder(nn.Module):
                                                              cur_labels,
                                                              cur_max_nsymbs)
         else:
-            decode = self.beam_decode if beam_decoding else self.decoder
-            out = decode(sent_lengths, output_length, decoder_input0, decoder_hidden0,
-                               encoder_outputs,
-                               cur_labels,
-                               attention_plot)
+            if self.beam_decode:
+                out = self.beam_decode(sent_lengths, output_length, decoder_input0, decoder_hidden0,
+                                       encoder_outputs,
+                                       cur_labels,
+                                       attention_plot,
+                                       beam_width, beam_topk)
+            else:
+                out = self.decode(sent_lengths, output_length, decoder_input0, decoder_hidden0,
+                                  encoder_outputs,
+                                  cur_labels,
+                                  attention_plot)
             if attention_plot:
                 (outputs, labels), decoder_hidden, outputs_att = out
             else:
@@ -1473,34 +1501,33 @@ class EncoderDecoder(nn.Module):
         else:
             return outputs, labels
 
-    def beam_decode(self, sent_lengths, output_length, decoder_input0, hidden, context, cur_labels, attention_plot=False):
+    def beam_decode(self, sent_lengths, output_length, decoder_input0, hidden, context, cur_labels,
+                    attention_plot=False, beam_width=10, beam_topk=10):
         '''
         :param decoder_hiddens: input tensor of shape [1, B, H] for start of the decoding
         :param encoder_outputs: if you are using attention mechanism you can pass encoder outputs, [T, B, H] where T is the maximum length of input sentence
         :return: decoded_batch
         '''
         cur_batch_len = len(sent_lengths)
-        beam_width = 10
-        topk = 10  # how many sentence do you want to generate
         decoded_batch = []
 
         # decoding goes sentence by sentence
         for idx in range(cur_batch_len):
             if isinstance(hidden, tuple):  # LSTM case
                 decoder_hidden = (
-                hidden[0][idx, :].unsqueeze(0), hidden[1][idx, :].unsqueeze(0))
+                    hidden[0][idx, :].unsqueeze(0), hidden[1][idx, :].unsqueeze(0))
             else:
                 decoder_hidden = hidden[idx, :].unsqueeze(0)
-            #encoder_output = encoder_outputs[:, idx, :].unsqueeze(1)
+            # encoder_output = encoder_outputs[:, idx, :].unsqueeze(1)
             encoder_output = context[idx, :, :].unsqueeze(0)
 
             # Start with the start of the sentence token
-            #decoder_input = torch.LongTensor([[SOS_token]], device=device)
+            # decoder_input = torch.LongTensor([[SOS_token]], device=device)
             decoder_input = decoder_input0[idx].unsqueeze(0)  # label emb
             decoder_input_label = self.label_idx["<s>"]
             # Number of sentence to generate
             endnodes = []
-            number_required = min((topk + 1), topk - len(endnodes))
+            number_required = min((beam_topk + 1), beam_topk - len(endnodes))
 
             # starting node -  hidden vector, previous node, word id, logp, length
             node = BeamSearchNode(decoder_hidden, None, decoder_input_label, decoder_input, 0, 1)
@@ -1530,19 +1557,21 @@ class EncoderDecoder(nn.Module):
                         continue
 
                 # decode for one step using decoder
-                h_t, c_t, decoder_output, _ = self.decoder.step(None, decoder_input, decoder_hidden, encoder_output, attention_plot=False, log_softmax=True)
+                h_t, c_t, decoder_output, _ = self.decoder.step(None, decoder_input, decoder_hidden, encoder_output,
+                                                                attention_plot=False, log_softmax=True)
                 decoder_hidden = (h_t, c_t)
                 # PUT HERE REAL BEAM SEARCH OF TOP
                 log_prob, indexes = torch.topk(decoder_output, beam_width)
                 nextnodes = []
 
                 for new_k in range(beam_width):
-                    #decoded_t = indexes[0][new_k].view(1, -1)
+                    # decoded_t = indexes[0][new_k].view(1, -1)
                     decoded_t = indexes[0][new_k]
                     log_p = log_prob[0][new_k].item()
 
                     decoded_t_emb = self.decoder.label_embeddings(decoded_t).unsqueeze(0)
-                    node = BeamSearchNode(decoder_hidden, n, decoded_t.item(), decoded_t_emb, n.logp + log_p, n.leng + 1)
+                    node = BeamSearchNode(decoder_hidden, n, decoded_t.item(), decoded_t_emb, n.logp + log_p,
+                                          n.leng + 1)
                     score = -node.eval()
                     nextnodes.append((score, node))
 
@@ -1551,11 +1580,11 @@ class EncoderDecoder(nn.Module):
                     score, nn = nextnodes[i]
                     nodes.put((score, nn))
                     # increase qsize
-                qsize += len(nextnodes)# - 1
+                qsize += len(nextnodes)  # - 1
 
             # choose nbest paths, back trace them
             if len(endnodes) == 0:
-                endnodes = [nodes.get() for _ in range(topk)]
+                endnodes = [nodes.get() for _ in range(beam_topk)]
 
             utterances = []
             for score, n in sorted(endnodes, key=operator.itemgetter(0)):
@@ -1577,12 +1606,12 @@ class EncoderDecoder(nn.Module):
 
         return decoded_batch
 
-
     def loss(self, fwd_out, target):
         loss_fn = nn.CrossEntropyLoss(ignore_index=self.label_padding_idx)
         return loss_fn(fwd_out, target)
 
-    def train_model(self, corpus, dev_corpus, corpus_encoder, feature_encoder, n_epochs, ret_period, optimizer):
+    def train_model(self, corpus, dev_corpus, corpus_encoder, feature_encoder, n_epochs, ret_period, optimizer,
+                    experiment):
 
         self.train()
 
@@ -1595,74 +1624,79 @@ class EncoderDecoder(nn.Module):
         dev_f1s = []
 
         # for i in range(n_epochs):
-        while next_ep:
-            i += 1
-            running_loss = 0.0
+        with experiment.train():
 
-            # shuffle the corpus
-            corpus.shuffle()
-            # potential external features
-            if feature_encoder is not None:
-                _features = feature_encoder.get_feature_batches(corpus, self.batch_size, self.feat_type)
-            else:
-                _features = None
-            if self.constrained_decoding is not None and "mod4" in self.constrained_decoding:
-                # get constraint mod4:
-                _max_nsymbs = get_max_nsymb_batches(corpus, self.batch_size)
-            # get train batch
-            for idx, (cur_insts, cur_labels) in enumerate(
-                    corpus_encoder.get_batches(corpus, self.batch_size, token_ids=bool(self.bert_embs))):
-                cur_feats = _features.__next__() if _features is not None else None
-                if _features is not None:
-                    assert len(cur_feats) == len(cur_insts)
-                    cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
-                                                                                           len(self.feat_type))
-                cur_max_nsymbs = _max_nsymbs.__next__() if (
+            while next_ep:
+                i += 1
+                running_loss = 0.0
+
+                # shuffle the corpus
+                corpus.shuffle()
+                # potential external features
+                if feature_encoder is not None:
+                    _features = feature_encoder.get_feature_batches(corpus, self.batch_size, self.feat_type)
+                else:
+                    _features = None
+                if self.constrained_decoding is not None and "mod4" in self.constrained_decoding:
+                    # get constraint mod4:
+                    _max_nsymbs = get_max_nsymb_batches(corpus, self.batch_size)
+                # get train batch
+                for idx, (cur_insts, cur_labels) in enumerate(
+                        corpus_encoder.get_batches(corpus, self.batch_size, token_ids=bool(self.bert_embs))):
+                    cur_feats = _features.__next__() if _features is not None else None
+                    if _features is not None:
+                        assert len(cur_feats) == len(cur_insts)
+                        cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
+                                                                                               len(self.feat_type))
+                    cur_max_nsymbs = _max_nsymbs.__next__() if (
                             self.constrained_decoding is not None and "mod4" in self.constrained_decoding) else None
-                cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(
-                    cur_insts, cur_labels, self.device, padding_idx=0 if self.bert_embs else corpus_encoder.vocab.pad)
-                output_length = max(cur_label_lengths).item()
-                # forward pass
-                fwd_out, labels = self.forward(cur_insts, cur_feats, cur_lengths,
-                                               output_length=output_length,
-                                               cur_labels=cur_labels,
-                                               cur_max_nsymbs=cur_max_nsymbs)
-                fwd_out = fwd_out.contiguous().view(-1, fwd_out.size()[-1])
-                # loss calculation
-                loss = self.loss(fwd_out, cur_labels.view(-1).long())
+                    cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(
+                        cur_insts, cur_labels, self.device,
+                        padding_idx=0 if self.bert_embs else corpus_encoder.vocab.pad)
+                    output_length = max(cur_label_lengths).item()
+                    # forward pass
+                    fwd_out, labels = self.forward(cur_insts, cur_feats, cur_lengths,
+                                                   output_length=output_length,
+                                                   cur_labels=cur_labels,
+                                                   cur_max_nsymbs=cur_max_nsymbs)
+                    fwd_out = fwd_out.contiguous().view(-1, fwd_out.size()[-1])
+                    # loss calculation
+                    loss = self.loss(fwd_out, cur_labels.view(-1).long())
 
-                # backprop
-                optimizer.zero_grad()  # reset tensor gradients
-                loss.backward()  # compute gradients for network params w.r.t loss
-                optimizer.step()  # perform the gradient update step
-                running_loss += loss.item()
-            _y_pred, _y_true = self.predict(dev_corpus, feature_encoder, corpus_encoder)
-            # for accuracy calculation
-            y_true = [str(y) for y in _y_true]
-            y_pred = [str(y) for y in _y_pred]
-            self.train()  # set back the train mode
-            dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
-            dev_accs.append(dev_acc)
-            dev_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
-            dev_f1s.append(dev_f1)
-            # if i == 0 or dev_acc > best_acc:
-            if len(dev_accs) == 1 or dev_acc > best_acc:
-                self.save(self.f_model)
-                best_acc = dev_acc
-                best_acc_i = i
-                print("**best_acc: %.3f**" % best_acc)
-            if len(dev_f1s) == 1 or dev_f1 > best_f1:
-                best_f1 = dev_f1
-                best_f1_i = i
-            # stopping criterion with a retention period of 10 epochs:
-            if len(dev_accs) > ret_period - 1 and (i - best_acc_i > ret_period and i - best_f1_i > ret_period):
-                next_ep = False
+                    # backprop
+                    optimizer.zero_grad()  # reset tensor gradients
+                    loss.backward()  # compute gradients for network params w.r.t loss
+                    optimizer.step()  # perform the gradient update step
+                    running_loss += loss.item()
+                _y_pred, _y_true = self.predict(dev_corpus, feature_encoder, corpus_encoder)
+                # for accuracy calculation
+                y_true = [str(y) for y in _y_true]
+                y_pred = [str(y) for y in _y_pred]
+                self.train()  # set back the train mode
+                dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
+                experiment.log_metric("accuracy", dev_acc, step=i)
+                dev_accs.append(dev_acc)
+                dev_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
+                experiment.log_metric("F1", dev_f1, step=i)
+                dev_f1s.append(dev_f1)
+                # if i == 0 or dev_acc > best_acc:
+                if len(dev_accs) == 1 or dev_acc > best_acc:
+                    self.save(self.f_model)
+                    best_acc = dev_acc
+                    best_acc_i = i
+                    print("**best_acc: %.3f**" % best_acc)
+                if len(dev_f1s) == 1 or dev_f1 > best_f1:
+                    best_f1 = dev_f1
+                    best_f1_i = i
+                # stopping criterion with a retention period of 10 epochs:
+                if len(dev_accs) > ret_period - 1 and (i - best_acc_i > ret_period and i - best_f1_i > ret_period):
+                    next_ep = False
+                print('ep %d, loss: %.3f, dev_acc: %.3f, dev_f1: %.3f' % (i, running_loss, dev_acc, dev_f1))
 
-            print('ep %d, loss: %.3f, dev_acc: %.3f, dev_f1: %.3f' % (i, running_loss, dev_acc, dev_f1))
+        return best_acc, experiment
 
-        return best_acc
-
-    def predict(self, corpus, feature_encoder, corpus_encoder, attention_plot=False, beam_decoding=False):
+    def predict(self, corpus, feature_encoder, corpus_encoder, attention_plot=False, beam_decoding=False, beam_width=10,
+                beam_topk=10):
         self.eval()
         y_pred = list()
         y_true = list()
@@ -1674,6 +1708,7 @@ class EncoderDecoder(nn.Module):
             _features = None
         # get constraint mod4:
         _max_nsymbs = get_max_nsymb_batches(corpus, self.batch_size)
+
         for idx, (cur_insts, cur_labels) in enumerate(
                 corpus_encoder.get_batches(corpus, self.batch_size, token_ids=bool(self.bert_embs))):
             cur_feats = _features.__next__() if _features is not None else None
@@ -1682,7 +1717,7 @@ class EncoderDecoder(nn.Module):
                 cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
                                                                                        len(self.feat_type))
             cur_max_nsymbs = _max_nsymbs.__next__() if (
-                        self.constrained_decoding is not None and "mod4" in self.constrained_decoding) else None
+                    self.constrained_decoding is not None and "mod4" in self.constrained_decoding) else None
             cur_insts, cur_lengths, cur_labels, cur_label_lengths = corpus_encoder.batch_to_tensors(cur_insts,
                                                                                                     cur_labels,
                                                                                                     self.device,
@@ -1691,7 +1726,8 @@ class EncoderDecoder(nn.Module):
 
             # forward pass
             out = self.forward(cur_insts, cur_feats, cur_lengths, cur_labels=cur_labels, cur_max_nsymbs=cur_max_nsymbs,
-                               attention_plot=attention_plot, beam_decoding=beam_decoding)
+                               attention_plot=attention_plot, beam_decoding=beam_decoding, beam_width=beam_width,
+                               beam_topk=beam_topk)
 
             if attention_plot:
                 _, labels, outputs_att = out
@@ -1708,6 +1744,7 @@ class EncoderDecoder(nn.Module):
             y_pred = corpus_encoder.strip_until_eos(y_pred)
         y_pred = [list(y) for y in y_pred]
         y_true = [list(y) for y in y_true]
+
         return y_pred, y_true
 
     def save(self, f_model='lstm_encdec.tar', dir_model='../out/'):

@@ -4,6 +4,7 @@ import pickle
 import random
 from copy import deepcopy
 from datetime import datetime
+from comet_ml import Experiment
 
 from analysis import eval_solver
 from pycocoevalcap.eval import COCOEvalCap
@@ -165,6 +166,8 @@ def main():
     arg_parser.add_argument("--augment-train", action="store_true")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training")
     arg_parser.add_argument("--beam-decoding", action="store_true")
+    arg_parser.add_argument("--beam-topk", type=int, default=10)
+    arg_parser.add_argument("--beam-width", type=int, default=10)
     arg_parser.add_argument("--bert", action="store_true",
                             help="use bert to initialize token embeddings")
     arg_parser.add_argument("--no-load-bert", action="store_true",
@@ -204,6 +207,7 @@ def main():
                             help="group | take | take_wr | both_take | take3 | take_declen2 | take_wr_declen2 | take_declen3 | take_wr_declen3 | both_take_declen3. To use with PointerNet.")
     arg_parser.add_argument("--label-type-dec", type=str,
                             help="predicates | n-predicates | n-full | predicates-all | predicates-arguments-all | full-pl | full-pl-no-arg-id | full-pl-split | full-pl-split-plc | full-pl-split-stat-dyn. To use with EncDec.")
+    arg_parser.add_argument("--log-experiment", action="store_true", help="logs using Comet.ML")
     arg_parser.add_argument("--lr", type=float, default=0.001, help="learning rate, default: 0.001")
     # arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
     arg_parser.add_argument("--max-output-len", type=int, default=500,
@@ -315,6 +319,8 @@ def main():
         test_score_f1_runs = []
         test_score_bleu4_runs = []
         dev_score_runs = []
+    # keep track of comet experiment instances
+    experiments = []
     # train models
     if args.model_path is None:
         for n in range(args.n_runs):
@@ -428,6 +434,12 @@ def main():
 
                 classifier = EncoderDecoder(**net_params)
                 eval_score = accuracy_score
+
+                # comet-ml
+                experiment = Experiment(project_name="neural-nlp4plp", disabled=not args.log_experiment)
+                experiment.log_parameters(net_params)
+                experiment.set_model_graph(repr(classifier))
+
             elif args.model == "lstm-enc-split-dec":
                 # initialize vocab
                 corpus_encoder = Nlp4plpEncSplitDecEncoder.from_corpus(train_corp, dev_corp)
@@ -479,9 +491,10 @@ def main():
             optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
 
             print(os.path.abspath('../out/' + classifier.f_model))
-            best_dev_score = classifier.train_model(train_corp, dev_corp, corpus_encoder, feature_encoder, args.epochs, args.ret_period,
-                                   optimizer)
+            best_dev_score, experiment = classifier.train_model(train_corp, dev_corp, corpus_encoder, feature_encoder, args.epochs, args.ret_period,
+                                   optimizer, experiment)
             dev_score_runs.append((best_dev_score, f_model))
+            experiments.append(experiment)
 
         print(f"Finished training. Best dev score and model: {sorted(dev_score_runs, reverse=True)[0]}")
         print(f"All dev scores and models: {dev_score_runs}")
@@ -495,14 +508,47 @@ def main():
         classifier = PointerNet.load(f_model=net_params['f_model'])
     elif args.model == 'lstm-enc-dec':
         if args.model_path is None:
-            model_path = sorted(dev_score_runs, reverse=True)[0][1]
+            best_id = np.argmax([score for score, path in dev_score_runs])
+            model_path = dev_score_runs[best_id][1]
+            experiment = experiments[best_id]
+            print(f"Evaluating best model: {model_path}")
         else:
             model_path = args.model_path
+            # experiment not yet defined
+            experiment = Experiment(project_name="neural-nlp4plp", disabled=not args.log_experiment)
+
         corpus_encoder = Nlp4plpEncDecEncoder.from_corpus(train_corp, dev_corp)
         if args.feat_type:
             feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.feat_type)
         eval_score = accuracy_score
         classifier = EncoderDecoder.load(f_model=model_path)
+        if args.model_path is not None:
+            experiment.log_parameters({"n_layers": classifier.n_lstm_layers,
+                 "hidden_dim": classifier.hidden_dim,
+                 "vocab_size": classifier.vocab_size,
+                 "padding_idx": classifier.padding_idx,
+                 "label_padding_idx": classifier.label_padding_idx,
+                 "embedding_dim": classifier.emb_dim,
+                 "dropout": classifier.dropout,
+                 "batch_size": classifier.batch_size,
+                 "word_idx": classifier.word_idx,
+                 "label_idx": classifier.label_idx,
+                 "pretrained_emb_path": classifier.pretrained_emb_path,
+                 "max_output_len": classifier.max_output_len,
+                 "label_size": classifier.n_labels,
+                 "f_model": classifier.f_model,
+                 "bidir": classifier.bidir,
+                 "bert_embs": classifier.bert_embs,
+                 "constrained_decoding": classifier.constrained_decoding,
+                 "feature_idx": classifier.feature_idx,
+                 "feat_size": classifier.feat_size,
+                 "feat_padding_idx": classifier.feat_padding_idx,
+                 "feat_emb_dim": classifier.feat_emb_dim,
+                 "feat_type": classifier.feat_type,
+                 "feat_onehot": classifier.feat_onehot,
+                 "cuda": classifier.cuda})
+            experiment.set_model_graph(repr(classifier))
+
         assert classifier.word_idx == corpus_encoder.vocab.word2idx
         assert classifier.label_idx == corpus_encoder.label_vocab.word2idx, (
         classifier.label_idx, corpus_encoder.label_vocab.word2idx)
@@ -522,7 +568,7 @@ def main():
         y_true2 = [str(y) for y in _y_true2]
     else:
         _y_pred, _y_true = classifier.predict(test_corp, feature_encoder, corpus_encoder, args.attention_plot,
-                                              args.beam_decoding)
+                                              args.beam_decoding, args.beam_width, args.beam_topk)
 
     # for accuracy calculation
     if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:  # or net_params["output_len"] > 1:
@@ -538,6 +584,8 @@ def main():
 
     # compute scoring metrics
     test_acc = eval_score(y_true=y_true, y_pred=y_pred)
+    with experiment.test():
+        experiment.log_metric("accuracy", test_acc)
     if args.oracle_dec1:
         test_acc1 = accuracy_score(y_true=y_true1, y_pred=y_pred1)
         test_acc2 = accuracy_score(y_true=y_true2, y_pred=y_pred2)
@@ -548,12 +596,16 @@ def main():
         print(correct)
     if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:
         test_f1 = np.mean([f1_score(y_true=t, y_pred=p) for t, p in zip(_y_true, _y_pred)])
+        with experiment.test():
+            experiment.log_metric("F1", test_f1)
         y_true_dict = {c: [" ".join([str(i) for i in t])] for c, t in enumerate(_y_true)}
         y_pred_dict = {c: [" ".join([str(i) for i in p])] for c, p in enumerate(_y_pred)}
         test_coco_eval = COCOEvalCap(y_true_dict, y_pred_dict)
         test_coco_eval.evaluate()
         test_coco = test_coco_eval.eval
         test_bleu4 = test_coco["Bleu_4"]
+        with experiment.test():
+            experiment.log_metric("bleu4", test_bleu4)
         print('TEST SCORE: acc: %.3f, f1: %.3f, bleu4: %.3f, total: %i' % (
             test_acc, test_f1, test_bleu4, len(y_pred)))
         test_score_runs.append(test_acc)
@@ -574,7 +626,7 @@ def main():
                                      beam_decoding=args.beam_decoding)
                 if args.run_solver:
                     eval_solver(os.path.abspath(f"../out/log_w{classifier.f_model}/"), backoff=args.solver_backoff,
-                                backoff_constraint=args.solver_backoff_constraint, beam_decoding=args.beam_decoding)
+                                backoff_constraint=args.solver_backoff_constraint, beam_decoding=args.beam_decoding, beam_width=args.beam_width)
             elif args.label_type_dec in {"full-pl-split", "full-pl-split-stat-dyn"}:
                 save_preds_encdec_pl(test_corp, _y_true, _y_pred, classifier.f_model)
     if not args.save_model:
