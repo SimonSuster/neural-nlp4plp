@@ -340,7 +340,22 @@ def eval_solver(dirname, backoff=False, backoff_constraint=False, beam_decoding=
     main_solver(report_f)
 
 
-def run_solver(dirname, backoff, backoff_constraint, f):
+def rule_constr_viol(dirname, f):
+    with open(f"{dirname}/{f}") as fh:
+       data = [(f, fh.read().split())]
+    con = ConstraintStats(data)
+    con.get_all()
+
+    return True if sum(con.c_f.values()) > 0 else False
+
+def grammar_constr_viol(dirname, f):
+    out = subprocess.check_output(f"python3.7 /home/suster/Apps/pietrototis/fork/nlp4plp/parser/grammar.py {dirname}/{f}",
+                                      shell=True)
+    return True if out else False
+    #return False
+
+
+def run_solver(dirname, backoff, backoff_constraint, f, constr_viol=grammar_constr_viol):
     #print(f"***  INST:    {f}")
     try:
         out = subprocess.check_output(f"sh /home/suster/Apps/pietrototis/fork/nlp4plp/run/run.sh {f} {dirname}",
@@ -348,7 +363,8 @@ def run_solver(dirname, backoff, backoff_constraint, f):
         if backoff:
             try:
                 prob = float(out.decode("utf-8").strip().split("\t")[-1])
-                if prob == 0.:
+                if constr_viol(dirname, f) or prob == 0.:
+                    #print(f"{constr_viol(dirname, f)} {prob == 0.}")
                     #print("***0 PROB")
                     id = eval(re.findall("_p(\d+)", f)[0])
                     next_f = re.sub("_p(\d+)", f"_p{id + 1}", f)
@@ -364,11 +380,7 @@ def run_solver(dirname, backoff, backoff_constraint, f):
                 #print(f"ValueError: {out}")
                 return out.decode("utf-8").replace("\t", " ").strip()
         elif backoff_constraint:
-            with open(f"{dirname}/{f}") as fh:
-                data = [(f, fh.read().split())]
-            con = ConstraintStats(data)
-            con.get_all()
-            if sum(con.c_f.values()) > 0:
+            if constr_viol(dirname, f):
                 # constraint violated, try to move to next beam cand
                 id = eval(re.findall("_p(\d+)", f)[0])
                 next_f = re.sub("_p(\d+)", f"_p{id + 1}", f)
@@ -399,13 +411,15 @@ def run_solver(dirname, backoff, backoff_constraint, f):
 
 if __name__ == '__main__':
     #main_solver("/home/suster/Apps/out/log_w20191105_133638_491720/solver_output_pl_p_beam_backoff")
-    #eval_solver("/nfshome/suster/Apps/out/log_w20191108_093708_793772/", backoff=False, backoff_constraint=False, beam_decoding=True)
-    eval_solver("/home/suster/Apps/out/log_w20191114_184101_415459/", backoff=True, backoff_constraint=False,beam_decoding=True)
+    #eval_solver("/nfshome/suster/Apps/out/log_w20191108_093708_793772/", backoff=True, backoff_constraint=False, beam_decoding=True)
+    #eval_solver("/home/suster/Apps/out/log_w20191114_184101_415459/", backoff=True, backoff_constraint=False,beam_decoding=True)
+    eval_solver("/home/suster/Apps/out/ensemble/", backoff=False, backoff_constraint=False, beam_decoding=True)
 
     #eval_solver("/home/suster/Apps/out/log_w20191114_193035_425739/", backoff=False, backoff_constraint=False,beam_decoding=True)
 
     #print(mrr_solver("/home/suster/Apps/out/log_w20191114_184101_415459/", topk=1))
-    #main_solver("/home/suster/Apps/out/log_w20191114_184101_415459/solver_output_pl_p_beam")
+    #main_solver("/home/suster/Apps/out/log_w20191114_184101_415459/solver_output_pl_p_beam10_backoff")
+    #main_solver("/nfshome/suster/Apps/out/log_w20191031_174902_118257/solver_output_pl_p")
     #main_solver("/home/suster/Apps/out/log_w20191105_133638_491720/solver_output_pl_p_nobeam")
 
     #main_test_train_comparison()

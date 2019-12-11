@@ -161,7 +161,7 @@ def augment_train(train_corp, fac=10):
 
 
 def main():
-    arg_parser = argparse.ArgumentParser(description="parser for End-to-End Memory Networks")
+    arg_parser = argparse.ArgumentParser(description="parser for neural-nlp4plp")
     arg_parser.add_argument("--attention-plot", action="store_true")
     arg_parser.add_argument("--augment-train", action="store_true")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training")

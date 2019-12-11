@@ -1477,7 +1477,7 @@ class EncoderDecoder(nn.Module):
                                                              cur_labels,
                                                              cur_max_nsymbs)
         else:
-            if self.beam_decode:
+            if beam_decoding:
                 out = self.beam_decode(sent_lengths, output_length, decoder_input0, decoder_hidden0,
                                        encoder_outputs,
                                        cur_labels,
