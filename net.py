@@ -169,7 +169,7 @@ class Encoder(nn.Module):
 class LSTMClassifier(nn.Module):
     # based on https://github.com/MadhumitaSushil/sepsis/blob/master/src/classifiers/lstm.py
     def __init__(self, n_layers, hidden_dim, vocab_size, padding_idx, label_padding_idx, embedding_dim, dropout,
-                 label_size, batch_size,
+                 label_size, batch_size, label_idx,
                  word_idx, pretrained_emb_path, f_model, bidir=False,
                  bert_embs=None,
                  constrained_decoding=None,
@@ -188,6 +188,7 @@ class LSTMClassifier(nn.Module):
         self.dropout = dropout
         self.batch_size = batch_size
         self.n_labels = label_size
+        self.label_idx = label_idx
         self.word_idx = word_idx
         self.pretrained_emb_path = pretrained_emb_path
         self.f_model = f_model
@@ -217,7 +218,7 @@ class LSTMClassifier(nn.Module):
 
     def forward(self, sentence, sent_lengths):
         hidden = self.encoder.init_hidden()
-        lstm_output, hidden = self.encoder(sentence, None, sent_lengths, hidden)
+        lstm_output, hidden = self.encoder(sentence, None, sent_lengths, hidden, self.training)
         # use the output of the last LSTM layer at the end of the last valid timestep to predict output
         # If sequence len is constant, using hidden[0] is the same as lstm_out[-1].
         # For variable len seq, use hidden[0] for the hidden state at last valid timestep. Do it for the last hidden layer
@@ -232,52 +233,75 @@ class LSTMClassifier(nn.Module):
         loss_fn = nn.NLLLoss(ignore_index=self.label_padding_idx)
         return loss_fn(fwd_out, target)
 
-    def train_model(self, corpus, dev_corpus, corpus_encoder, feature_encoder, n_epochs, ret_period, optimizer):
+    def train_model(self, corpus, dev_corpus, corpus_encoder, feature_encoder, n_epochs, ret_period, optimizer, experiment, return_scores=False):
 
         self.train()
 
         optimizer = optimizer
         best_acc = 0.
+        next_ep = True  # use retention period
+        i = -1
+        dev_accs = []
 
-        for i in range(n_epochs):
-            running_loss = 0.0
+        with experiment.train():
+            while next_ep:
+                i += 1
+                running_loss = 0.0
 
-            # shuffle the corpus
-            corpus.shuffle()
-            # get train batch
-            for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size)):
-                cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
+                # shuffle the corpus
+                corpus.shuffle()
+                # get train batch
+                for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size)):
+                    cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
 
-                # forward pass
-                fwd_out = self.forward(cur_insts, cur_lengths)
+                    # forward pass
+                    fwd_out = self.forward(cur_insts, cur_lengths)
 
-                # loss calculation
-                loss = self.loss(fwd_out, cur_labels)
+                    # loss calculation
+                    loss = self.loss(fwd_out, cur_labels)
 
-                # backprop
-                optimizer.zero_grad()  # reset tensor gradients
-                loss.backward()  # compute gradients for network params w.r.t loss
-                optimizer.step()  # perform the gradient update step
-                running_loss += loss.item()
-            y_pred, y_true = self.predict(dev_corpus, None, corpus_encoder)
-            self.train()  # set back the train mode
-            dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
-            if i == 0 or dev_acc > best_acc:
-                self.save(self.f_model)
-                best_acc = dev_acc
-            print('ep %d, loss: %.3f, dev_acc: %.3f' % (i, running_loss, dev_acc))
+                    # backprop
+                    optimizer.zero_grad()  # reset tensor gradients
+                    loss.backward()  # compute gradients for network params w.r.t loss
+                    optimizer.step()  # perform the gradient update step
+                    running_loss += loss.item()
+                y_pred, y_true = self.predict(dev_corpus, None, corpus_encoder, return_scores)
+                self.train()  # set back the train mode
+                dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
+                dev_accs.append(dev_acc)
+                if len(dev_accs) == 1 or dev_acc > best_acc:
+                    self.save(self.f_model)
+                    best_acc = dev_acc
+                    best_acc_i = i
+                    print("**best_acc: %.3f**" % best_acc)
+                # stopping criterion with a retention period of 10 epochs:
+                if len(dev_accs) > ret_period - 1 and i - best_acc_i > ret_period:
+                    next_ep = False
+                print('ep %d, loss: %.3f, dev_acc: %.3f' % (i, running_loss, dev_acc))
 
-    def predict(self, corpus, feature_encoder, corpus_encoder):
+        return best_acc, experiment
+
+    def predict(self, corpus, feature_encoder, corpus_encoder, return_scores):
         self.eval()
         y_pred = list()
         y_true = list()
 
-        for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size)):
-            cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
+        for idx, (cur) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size, return_scores)):
+            if return_scores:
+                cur_insts, cur_labels, cur_scores = cur
+                cur_insts, cur_labels, cur_lengths, cur_scores = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device, cur_scores)
+            else:
+                cur_insts, cur_labels = cur
+                cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
             y_true.extend(cur_labels.cpu().numpy())
 
             # forward pass
             fwd_out = self.forward(cur_insts, cur_lengths)
+
+            # mixture re-ranking:
+            # sum up the probability of the positive class and the probability of that beam candidate
+            # our beam probs are repr. as positive scores, so we take negative here prior to taking the exp.
+            fwd_out[:, self.label_idx[1]] = torch.log(torch.exp(fwd_out[:, self.label_idx[1]]) + torch.exp(-cur_scores))
             __, cur_preds = torch.max(fwd_out.detach(), 1)  # first return value is the max value, second is argmax
             y_pred.extend(cur_preds.cpu().numpy())
 
@@ -295,6 +319,7 @@ class LSTMClassifier(nn.Module):
                       'label_size': self.n_labels,
                       'batch_size': self.batch_size,
                       'word_idx': self.word_idx,
+                      'label_idx': self.label_idx,
                       'pretrained_emb_path': self.pretrained_emb_path,
                       'f_model': self.f_model
                       }
@@ -479,7 +504,7 @@ class PointerAttention(nn.Module):
         self.softmax = nn.Softmax()
 
         # Initialize vector V
-        nn.init.uniform(self.V, -1, 1)
+        nn.init.uniform_(self.V, -1, 1)
         self.to(self.device)
 
     def forward(self, input,
@@ -620,17 +645,17 @@ class PointerDecoder(nn.Module):
             gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
             input, forget, cell, out = gates.chunk(4, 1)
 
-            input = F.sigmoid(input)
-            forget = F.sigmoid(forget)
-            cell = F.tanh(cell)
-            out = F.sigmoid(out)
+            input = torch.sigmoid(input)
+            forget = torch.sigmoid(forget)
+            cell = torch.tanh(cell)
+            out = torch.sigmoid(out)
 
             c_t = (forget * c) + (input * cell)
-            h_t = out * F.tanh(c_t)
+            h_t = out * torch.tanh(c_t)
 
             # Attention section
             hidden_t, output = self.att(h_t, context, torch.eq(mask, 0))
-            hidden_t = F.tanh(self.hidden_out(torch.cat((hidden_t, h_t), 1)))
+            hidden_t = torch.tanh(self.hidden_out(torch.cat((hidden_t, h_t), 1)))
 
             return hidden_t, c_t, output
 
@@ -765,17 +790,17 @@ class Decoder(nn.Module):
         gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
         input, forget, cell, out = gates.chunk(4, 1)
 
-        input = F.sigmoid(input)
-        forget = F.sigmoid(forget)
-        cell = F.tanh(cell)
-        out = F.sigmoid(out)
+        input = torch.sigmoid(input)
+        forget = torch.sigmoid(forget)
+        cell = torch.tanh(cell)
+        out = torch.sigmoid(out)
 
         c_t = (forget * c) + (input * cell)
-        h_t = out * F.tanh(c_t)
+        h_t = out * torch.tanh(c_t)
 
         # Attention section
         weighted, output_att = self.att(h_t, context, None)
-        hidden_t = F.tanh(self.hidden_out(torch.cat((weighted, h_t), 1)))
+        hidden_t = torch.tanh(self.hidden_out(torch.cat((weighted, h_t), 1)))
 
         # hidden_t: b*hidden_dim
         # weighted: b*hidden_dim
@@ -909,20 +934,20 @@ class ConstrainedDecoderForSingleDec(nn.Module):
         gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
         input, forget, cell, out = gates.chunk(4, 1)
 
-        input = F.sigmoid(input)
-        forget = F.sigmoid(forget)
-        cell = F.tanh(cell)
-        out = F.sigmoid(out)
+        input = torch.sigmoid(input)
+        forget = torch.sigmoid(forget)
+        cell = torch.tanh(cell)
+        out = torch.sigmoid(out)
 
         c_t = (forget * c) + (input * cell)
-        h_t = out * F.tanh(c_t)
+        h_t = out * torch.tanh(c_t)
 
         # Attention section
         if self.constrained_decoding is not None and "mod6" in self.constrained_decoding:
             weighted, output_att = self.att(torch.cat((h_t, par_decoder_input, par_hidden), 1), context, None)
         else:
             weighted, output_att = self.att(h_t, context, None)
-        hidden_t = F.tanh(self.hidden_out(torch.cat((weighted, h_t), 1)))
+        hidden_t = torch.tanh(self.hidden_out(torch.cat((weighted, h_t), 1)))
 
         # hidden_t: b*hidden_dim
         # weighted: b*hidden_dim
@@ -1078,17 +1103,17 @@ class ConstrainedDecoderForSplitDec(nn.Module):
             gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
         input, forget, cell, out = gates.chunk(4, 1)
 
-        input = F.sigmoid(input)
-        forget = F.sigmoid(forget)
-        cell = F.tanh(cell)
-        out = F.sigmoid(out)
+        input = torch.sigmoid(input)
+        forget = torch.sigmoid(forget)
+        cell = torch.tanh(cell)
+        out = torch.sigmoid(out)
 
         c_t = (forget * c) + (input * cell)
-        h_t = out * F.tanh(c_t)
+        h_t = out * torch.tanh(c_t)
 
         # Attention section
         weighted, output_att = self.att(h_t, context, None)
-        hidden_t = F.tanh(self.hidden_out(torch.cat((weighted, h_t), 1)))
+        hidden_t = torch.tanh(self.hidden_out(torch.cat((weighted, h_t), 1)))
 
         # hidden_t: b*hidden_dim
         # weighted: b*hidden_dim
@@ -1446,7 +1471,7 @@ class EncoderDecoder(nn.Module):
         self.decoder_input0 = Parameter(torch.FloatTensor(self.emb_dim), requires_grad=False)
 
         # Initialize decoder_input0
-        nn.init.uniform(self.decoder_input0, -1, 1)
+        nn.init.uniform_(self.decoder_input0, -1, 1)
         self.to(self.device)
 
     #    def forward(self, inputs):
@@ -1484,7 +1509,7 @@ class EncoderDecoder(nn.Module):
                                        attention_plot,
                                        beam_width, beam_topk)
             else:
-                out = self.decode(sent_lengths, output_length, decoder_input0, decoder_hidden0,
+                out = self.decoder(sent_lengths, output_length, decoder_input0, decoder_hidden0,
                                   encoder_outputs,
                                   cur_labels,
                                   attention_plot)
@@ -1492,7 +1517,7 @@ class EncoderDecoder(nn.Module):
                 (outputs, labels), decoder_hidden, outputs_att = out
             else:
                 if beam_decoding:
-                    outputs, labels = None, out
+                    outputs, labels = out
                 else:
                     (outputs, labels), decoder_hidden = out
 
@@ -1510,6 +1535,7 @@ class EncoderDecoder(nn.Module):
         '''
         cur_batch_len = len(sent_lengths)
         decoded_batch = []
+        decoded_batch_scores = []
 
         # decoding goes sentence by sentence
         for idx in range(cur_batch_len):
@@ -1587,6 +1613,7 @@ class EncoderDecoder(nn.Module):
                 endnodes = [nodes.get() for _ in range(beam_topk)]
 
             utterances = []
+            scores = []
             for score, n in sorted(endnodes, key=operator.itemgetter(0)):
                 utterance = []
                 utterance.append(n.wordid)
@@ -1601,10 +1628,12 @@ class EncoderDecoder(nn.Module):
                 if utterance[-1] == self.label_idx["</s>"]:
                     utterance = utterance[:-1]
                 utterances.append(utterance)  # skip <s> and </s>
+                scores.append(score)
 
             decoded_batch.append(utterances)
+            decoded_batch_scores.append(scores)
 
-        return decoded_batch
+        return decoded_batch_scores, decoded_batch
 
     def loss(self, fwd_out, target):
         loss_fn = nn.CrossEntropyLoss(ignore_index=self.label_padding_idx)
@@ -1699,6 +1728,7 @@ class EncoderDecoder(nn.Module):
                 beam_topk=10):
         self.eval()
         y_pred = list()
+        y_pred_scores = list()
         y_true = list()
 
         # potential external features
@@ -1730,22 +1760,24 @@ class EncoderDecoder(nn.Module):
                                beam_topk=beam_topk)
 
             if attention_plot:
-                _, labels, outputs_att = out
+                outputs, labels, outputs_att = out
             else:
-                _, labels = out
+                outputs, labels = out
             if attention_plot:
                 ids = [inst.id for inst in corpus.insts[len(y_true) - cur_insts.shape[1]:len(y_true)]]
                 write_att_plots(cur_insts, self.word_idx, labels, self.label_idx, outputs_att, self.f_model, ids)
             if not beam_decoding:
                 labels = labels.squeeze(1).cpu().numpy()
             y_pred.extend(labels)
+            if beam_decoding:
+                y_pred_scores.extend(outputs)
         y_true = corpus_encoder.strip_until_eos(y_true)
         if not beam_decoding:
             y_pred = corpus_encoder.strip_until_eos(y_pred)
         y_pred = [list(y) for y in y_pred]
         y_true = [list(y) for y in y_true]
 
-        return y_pred, y_true
+        return y_pred, y_pred_scores, y_true
 
     def save(self, f_model='lstm_encdec.tar', dir_model='../out/'):
 

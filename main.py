@@ -629,7 +629,7 @@ def main():
                                 backoff_constraint=args.solver_backoff_constraint, beam_decoding=args.beam_decoding, beam_width=args.beam_width)
             elif args.label_type_dec in {"full-pl-split", "full-pl-split-stat-dyn"}:
                 save_preds_encdec_pl(test_corp, _y_true, _y_pred, classifier.f_model)
-    if not args.save_model:
+    if not args.save_model and args.model_path is None:
         classifier.remove(f_model=classifier.f_model)
 
     if args.model in {"lstm-enc-dec", "lstm-enc-split-dec"}:

@@ -50,7 +50,8 @@ class Vocab:
         for key, sym in reserved_sym.items():  # populate reserved symbols such as bos, eos, unk, pad
             if sym in vocab_set:
                 print("Removing the reserved symbol {} from training corpus".format(sym))
-                del vocab_set[sym]  # @todo: delete symbol from embedding space also
+                #del vocab_set[sym]  # @todo: delete symbol from embedding space also
+                vocab_set.remove(sym)
             inst.word2idx.setdefault(sym, len(inst.word2idx))  # Add item with given default value if it does not exist.
             inst.reserved_sym[key] = sym  # Populate dictionary of reserved symbols. @todo: check data type of key. Var?
             setattr(cls, key,
@@ -138,9 +139,9 @@ class Nlp4plpInst:
             problem_ans = eval(problem_ans_raw)
             problem_ans = float(problem_ans)
         except (SyntaxError, NameError):  # capture unsuccessful eval()
-            print("can't convert ans to float: {}; problem id: {}".format(
-                problem_ans_raw,
-                problem_id))
+            #print("can't convert ans to float: {}; problem id: {}".format(
+            #    problem_ans_raw,
+            #    problem_id))
             problem_ans = None
         if ls[1].startswith("%"):
             num2n_map = eval(ls[1].split(" ", 1)[1])
@@ -242,6 +243,57 @@ class Nlp4plpInst:
         if diff_len > 0:
             num.extend(diff_len * ["sen_n:"])
         self.sen_ns = sen_ns
+
+
+class RerankerInst:
+    def __init__(self, cand, score, true, f):
+        self.txt = cand  # basic input (candidate program tokens)
+        self.score = score
+        self.ans_discrete = int(cand == true)  # label (is candidate program correct or not)
+        self.f = f  # file (problem) name
+
+
+class RerankerData:
+    def __init__(self, labels_pred, pred_scores, labels_true, fs):
+        self.insts = self.get_insts(labels_pred, pred_scores, labels_true, fs)
+        self.fs = [inst.f for inst in self.insts]
+
+    def get_insts(self, labels_pred, pred_scores, labels_true, fs):
+        insts = []
+        for c, i in enumerate(labels_pred):
+            for c2, cand in enumerate(i):
+                inst = RerankerInst(cand, pred_scores[c][c2], labels_true[c], fs[c])
+                insts.append(inst)
+
+        return insts
+
+    def stat(self):
+        c_pos = 0
+        for inst in self.insts:
+            if inst.ans_discrete == 1:
+                c_pos += 1
+        print(f"n pos: {c_pos}, n all: {len(self.insts)}, ratio neg: {(len(self.insts) - c_pos) / len(self.insts)}")
+
+    def shuffle(self):
+        assert len(self.fs) == len(self.insts)
+        idx = list(range(len(self.fs)))
+        np.random.shuffle(idx)
+        self.fs = list(np.array(self.fs)[idx])
+        self.insts = list(np.array(self.insts)[idx])
+
+    def remove_empty_txt(self):
+        n_before = len(self.insts)
+        new_insts = []
+        new_fs = []
+        for f, inst in zip(self.fs, self.insts):
+            if len(inst.txt) != 0:
+                new_insts.append(inst)
+                new_fs.append(f)
+        self.insts = new_insts
+        self.fs = new_fs
+        n_after = len(self.insts)
+        print(f"{n_before - n_after} instances removed (label is None)")
+
 
 
 class Nlp4plpCorpus:
@@ -1065,27 +1117,48 @@ class CorpusEncoder:
             else:
                 return self.vocab.unk
 
-    def get_batches(self, corpus, batch_size):
+    def get_batches(self, corpus, batch_size, return_scores=False):
+        """
+
+        :param corpus:
+        :param batch_size:
+        :param return_scores: used in reranking to output beam-candidate score
+        :return:
+        """
 
         instances = list()
         labels = list()
+        if return_scores:
+            scores = []
 
         for inst in corpus.insts:
             cur_inst = self.encode_inst(inst.txt)
+            if len(cur_inst) == 0:
+                print(inst)
             instances.append(cur_inst)
+            if return_scores:
+                scores.append(inst.score)
             if isinstance(inst.ans_discrete, str):
                 labels.append(self.encode_label(inst.ans_discrete))
             else:
                 labels.append(inst.ans_discrete)
             if len(instances) == batch_size:
-                yield (instances, labels)
+                if return_scores:
+                    yield (instances, labels, scores)
+                else:
+                    yield (instances, labels)
                 instances = list()
                 labels = list()
+                if return_scores:
+                    scores = list()
 
         if instances:
-            yield (instances, labels)
+            if return_scores:
+                yield (instances, labels, scores)
+            else:
+                yield (instances, labels)
 
-    def batch_to_tensors(self, cur_insts, cur_labels, device):
+    def batch_to_tensors(self, cur_insts, cur_labels, device, cur_scores=None):
         '''
         Transforms an encoded batch to the corresponding torch tensor
         :return: tensor of batch padded to maxlen, and a tensor of actual instance lengths
@@ -1104,7 +1177,11 @@ class CorpusEncoder:
         lengths = torch.tensor(lengths, dtype=torch.int).to(device)
         labels = torch.LongTensor(cur_labels).to(device)
 
-        return t, labels, lengths
+        if cur_scores is not None:
+            scores = torch.FloatTensor(cur_scores).to(device)
+            return t, labels, lengths, scores
+        else:
+            return t, labels, lengths
 
     def decode_inst(self, inst):
         out = [self.vocab.idx2word[i] for i in inst if i != self.vocab.pad]
@@ -1156,11 +1233,14 @@ class Nlp4plpEncoder(CorpusEncoder):
                         vocab_set.add(word)
                 if inst.ans_discrete not in label_vocab_set:
                     label_vocab_set.add(inst.ans_discrete)
+        # for debugging
+        if 1 not in label_vocab_set:
+            label_vocab_set.add(1)
         # create vocabs
         # @todo: add min and max freq to vocab items
         vocab = Vocab.populate_indices(vocab_set, unk=UNK, pad=PAD)  # bos=BOS, eos=EOS, bol=BOL, eol=EOL),
         # sg = Vocab.populate_indices(sg_set)
-        label_vocab = Vocab.populate_indices(label_vocab_set, eos=EOS, pad=PAD, unk=UNK)
+        label_vocab = Vocab.populate_indices(label_vocab_set)
 
         # return cls(vocab, sg)
         return cls(vocab, label_vocab)

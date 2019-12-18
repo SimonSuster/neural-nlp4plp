@@ -292,6 +292,7 @@ def mrr_solver(dirname, test_dir="/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Data
     fs = get_file_list(dirname, identifiers=[".pl_p"])
     fs = {os.path.splitext(os.path.basename(f))[0] for f in fs}
 
+    counter = Counter()
     for f in tqdm(fs):
         for n in range(topk):
             if not os.path.exists(f"{dirname}/{f}.pl_p{n}"):
@@ -304,12 +305,13 @@ def mrr_solver(dirname, test_dir="/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Data
                 assert 0. <= prob <= 1.
                 if round(prob, 4) == round(test_dict[f], 4):
                     if n!=0:
-                        print(n)
+                        counter[n] += 1
                     preds[test_ids.index(f), n] = 1
                     break
             except IndexError:
                 continue
     np.save(f"{dirname}/mrr_matrix_topk{topk}.npy", preds)
+    print(f"Number of correct answer per position (excluding position 0): {counter}")
     return mean_reciprocal_rank(preds)
 
 def eval_solver(dirname, backoff=False, backoff_constraint=False, beam_decoding=False, beam_width=10):
@@ -413,11 +415,12 @@ if __name__ == '__main__':
     #main_solver("/home/suster/Apps/out/log_w20191105_133638_491720/solver_output_pl_p_beam_backoff")
     #eval_solver("/nfshome/suster/Apps/out/log_w20191108_093708_793772/", backoff=True, backoff_constraint=False, beam_decoding=True)
     #eval_solver("/home/suster/Apps/out/log_w20191114_184101_415459/", backoff=True, backoff_constraint=False,beam_decoding=True)
-    eval_solver("/home/suster/Apps/out/ensemble/", backoff=False, backoff_constraint=False, beam_decoding=True)
+    #eval_solver("/home/suster/Apps/out/ensemble/", backoff=False, backoff_constraint=False, beam_decoding=True)
 
     #eval_solver("/home/suster/Apps/out/log_w20191114_193035_425739/", backoff=False, backoff_constraint=False,beam_decoding=True)
 
     #print(mrr_solver("/home/suster/Apps/out/log_w20191114_184101_415459/", topk=1))
+    print(mrr_solver("/home/suster/Apps/out/log_w20191118_151545_853074/", topk=5))
     #main_solver("/home/suster/Apps/out/log_w20191114_184101_415459/solver_output_pl_p_beam10_backoff")
     #main_solver("/nfshome/suster/Apps/out/log_w20191031_174902_118257/solver_output_pl_p")
     #main_solver("/home/suster/Apps/out/log_w20191105_133638_491720/solver_output_pl_p_nobeam")
