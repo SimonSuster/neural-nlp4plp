@@ -1,0 +1,28 @@
+The columns are:
+
+- Example identifier
+- Prediction label:
+- CORRECT: the prediction was correct
+- WRONG_0: the prediction was wrong, the prediction is 0.0
+- WRONG_1: the prediction was wrong, the prediction is 1.0
+- WRONG_X: the prediction was wrong, the prediction is any value between 0.0 or 1.0
+- SKIPPED: the example was skipped because it wasn’t in the supported subset
+- ERROR: the example produced an error or invalid model
+- NO_OUTPUT: the example produced no output (invalid model)
+- UNKNOWN: ???
+- TIMEOUT: solving the model timed out (after 60 seconds)
+- Predicted output
+- Correct output
+
+
+
+The distribution of labels is as follows:
+ 373 CORRECT
+  51 ERROR
+  20 NO_OUTPUT
+2183 SKIPPED
+   6 TIMEOUT
+   1 UNKNOWN
+ 387 WRONG_0
+  71 WRONG_1
+ 151 WRONG_X
