@@ -24,6 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Parameter
 from sklearn.metrics import accuracy_score, mean_squared_error
+from sklearn.metrics import f1_score as f1_score_sklearn
 
 from util import TorchUtils, load_emb, f1_score, load_bert
 from corpus_util import STAT, DYN
@@ -178,7 +179,9 @@ class LSTMClassifier(nn.Module):
                  feat_padding_idx=None,
                  feat_emb_dim=None,
                  feat_type=None,
-                 feat_onehot=None, cuda=0):
+                 feat_onehot=None,
+                 discrete_feat_type=None,
+                 cuda=0):
         super().__init__()
         self.n_lstm_layers = n_layers
         self.hidden_dim = hidden_dim
@@ -201,6 +204,7 @@ class LSTMClassifier(nn.Module):
         self.feat_emb_dim = feat_emb_dim
         self.feat_type = feat_type
         self.feat_onehot = feat_onehot
+        self.discrete_feat_type = discrete_feat_type
         self.final_emb_dim = self.emb_dim + (
             self.feat_emb_dim * len(self.feat_type) if self.feat_emb_dim is not None else 0)
 
@@ -213,16 +217,20 @@ class LSTMClassifier(nn.Module):
                                word_idx, pretrained_emb_path, bidir, bert_embs, feature_idx, feat_size,
                                feat_padding_idx,
                                feat_emb_dim, feat_type, feat_onehot, cuda=cuda)
-        self.hidden2label = nn.Linear(self.hidden_dim, self.n_labels)  # hidden to output layer
+        self.final_input_dim = self.hidden_dim + (len(self.discrete_feat_type) if self.discrete_feat_type is not None else 0)  # 1 extra dim for each feature
+        self.hidden2label = nn.Linear(self.final_input_dim, self.n_labels)  # hidden to output layer
         self.to(self.device)
 
-    def forward(self, sentence, sent_lengths):
+    def forward(self, sentence, emb_features, discrete_features, sent_lengths):
         hidden = self.encoder.init_hidden()
-        lstm_output, hidden = self.encoder(sentence, None, sent_lengths, hidden, self.training)
+        lstm_output, hidden = self.encoder(sentence, emb_features, sent_lengths, hidden, self.training)
         # use the output of the last LSTM layer at the end of the last valid timestep to predict output
         # If sequence len is constant, using hidden[0] is the same as lstm_out[-1].
         # For variable len seq, use hidden[0] for the hidden state at last valid timestep. Do it for the last hidden layer
-        y = self.hidden2label(hidden[0][-1])
+        input = hidden[0][-1]
+        if discrete_features is not None:
+            input = torch.cat([input, discrete_features], dim=1).to(self.device)
+        y = self.hidden2label(input)
         y = F.log_softmax(y, dim=1)
 
         return y
@@ -242,6 +250,7 @@ class LSTMClassifier(nn.Module):
         next_ep = True  # use retention period
         i = -1
         dev_accs = []
+        dev_f1s = []
 
         with experiment.train():
             while next_ep:
@@ -250,12 +259,37 @@ class LSTMClassifier(nn.Module):
 
                 # shuffle the corpus
                 corpus.shuffle()
+                # potential external features
+                if feature_encoder is not None:
+                    _features = feature_encoder.get_feature_batches(corpus, self.batch_size, self.feat_type)
+                else:
+                    _features = None
                 # get train batch
-                for idx, (cur_insts, cur_labels) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size)):
-                    cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
+                for idx, (cur) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size, return_scores)):
+                    if return_scores:
+                        cur_insts, cur_labels, cur_scores, cur_ranks = cur
+                    cur_feats = _features.__next__() if _features is not None else None
+
+                    if _features is not None:
+                        assert len(cur_feats) == len(cur_insts)
+                        cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
+                                                                                               len(self.feat_type))
+                    cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels,
+                                                                                             self.device)
+                    if self.discrete_feat_type is not None:
+                        cur_discrete_feats = []
+                        if "score" in self.discrete_feat_type:
+                            assert len(cur_scores) == len(cur_lengths)
+                            cur_discrete_feats.append(cur_scores)
+                        if "rank" in self.discrete_feat_type:
+                            assert len(cur_ranks) == len(cur_lengths)
+                            cur_discrete_feats.append(cur_ranks)
+                        cur_discrete_feats = torch.FloatTensor(cur_discrete_feats).permute(1, 0).to(self.device)
+                    else:
+                        cur_discrete_feats = None
 
                     # forward pass
-                    fwd_out = self.forward(cur_insts, cur_lengths)
+                    fwd_out = self.forward(cur_insts, cur_feats, cur_discrete_feats, cur_lengths)
 
                     # loss calculation
                     loss = self.loss(fwd_out, cur_labels)
@@ -269,6 +303,8 @@ class LSTMClassifier(nn.Module):
                 self.train()  # set back the train mode
                 dev_acc = accuracy_score(y_true=y_true, y_pred=y_pred)
                 dev_accs.append(dev_acc)
+                dev_f1 = f1_score_sklearn(y_true=y_true, y_pred=y_pred, average=None)
+                #dev_f1s.append(dev_f1)
                 if len(dev_accs) == 1 or dev_acc > best_acc:
                     self.save(self.f_model)
                     best_acc = dev_acc
@@ -277,7 +313,7 @@ class LSTMClassifier(nn.Module):
                 # stopping criterion with a retention period of 10 epochs:
                 if len(dev_accs) > ret_period - 1 and i - best_acc_i > ret_period:
                     next_ep = False
-                print('ep %d, loss: %.3f, dev_acc: %.3f' % (i, running_loss, dev_acc))
+                print('ep %d, loss: %.3f, dev_acc: %.3f, prec: %.3f, rec: %.3f' % (i, running_loss, dev_acc, dev_f1[0], dev_f1[1]))
 
         return best_acc, experiment
 
@@ -286,22 +322,46 @@ class LSTMClassifier(nn.Module):
         y_pred = list()
         y_true = list()
 
+        # potential external features
+        if feature_encoder is not None:
+            _features = feature_encoder.get_feature_batches(corpus, self.batch_size, self.feat_type)
+        else:
+            _features = None
+
         for idx, (cur) in enumerate(corpus_encoder.get_batches(corpus, self.batch_size, return_scores)):
             if return_scores:
-                cur_insts, cur_labels, cur_scores = cur
-                cur_insts, cur_labels, cur_lengths, cur_scores = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device, cur_scores)
+                cur_insts, cur_labels, cur_scores, cur_ranks = cur
             else:
                 cur_insts, cur_labels = cur
-                cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
+            cur_insts, cur_labels, cur_lengths = corpus_encoder.batch_to_tensors(cur_insts, cur_labels, self.device)
+
+            cur_feats = _features.__next__() if _features is not None else None
+            if _features is not None:
+                assert len(cur_feats) == len(cur_insts)
+                cur_feats, cur_feat_lengths = feature_encoder.feature_batch_to_tensors(cur_feats, self.device,
+                                                                                       len(self.feat_type))
+            if self.discrete_feat_type is not None:
+                cur_discrete_feats = []
+                if "score" in self.discrete_feat_type:
+                    assert len(cur_scores) == len(cur_lengths)
+                    cur_discrete_feats.append(cur_scores)
+                if "rank" in self.discrete_feat_type:
+                    assert len(cur_ranks) == len(cur_lengths)
+                    cur_discrete_feats.append(cur_ranks)
+                cur_discrete_feats = torch.FloatTensor(cur_discrete_feats).permute(1, 0).to(self.device)
+            else:
+                cur_discrete_feats = None
+
             y_true.extend(cur_labels.cpu().numpy())
 
             # forward pass
-            fwd_out = self.forward(cur_insts, cur_lengths)
+            fwd_out = self.forward(cur_insts, cur_feats, cur_discrete_feats, cur_lengths)
 
-            # mixture re-ranking:
-            # sum up the probability of the positive class and the probability of that beam candidate
-            # our beam probs are repr. as positive scores, so we take negative here prior to taking the exp.
-            fwd_out[:, self.label_idx[1]] = torch.log(torch.exp(fwd_out[:, self.label_idx[1]]) + torch.exp(-cur_scores))
+            ## mixture re-ranking:
+            ## sum up the probability of the positive class and the probability of that beam candidate
+            ## our beam probs are repr. as positive scores, so we take negative here prior to taking the exp.
+            #fwd_out[:, self.label_idx[1]] = torch.log(torch.exp(fwd_out[:, self.label_idx[1]]) + torch.exp(-cur_scores))
+
             __, cur_preds = torch.max(fwd_out.detach(), 1)  # first return value is the max value, second is argmax
             y_pred.extend(cur_preds.cpu().numpy())
 
@@ -501,7 +561,7 @@ class PointerAttention(nn.Module):
         self.V = Parameter(torch.FloatTensor(hidden_dim), requires_grad=True)
         self._inf = Parameter(torch.FloatTensor([float('-inf')]), requires_grad=False)
         self.tanh = nn.Tanh()
-        self.softmax = nn.Softmax()
+        self.softmax = nn.Softmax(dim=1)
 
         # Initialize vector V
         nn.init.uniform_(self.V, -1, 1)

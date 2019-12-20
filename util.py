@@ -197,7 +197,7 @@ def save_json(obj, filename):
         json.dump(obj, out, separators=(',', ':'))
 
 
-def f1_score(y_true, y_pred):
+def f1_score(y_true, y_pred, output_pr=False):
     common = Counter(y_pred) & Counter(y_true)
     num_same = sum(common.values())
     if num_same == 0:
@@ -206,7 +206,11 @@ def f1_score(y_true, y_pred):
     recall = 1.0 * num_same / len(y_true)
     f1 = (2 * precision * recall) / (precision + recall)
 
-    return f1
+    if output_pr:
+        return f1, precision, recall
+    else:
+        return f1
+
 
 def mean_reciprocal_rank(rs):
     """https://gist.github.com/bwhite/3726239

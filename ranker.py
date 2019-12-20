@@ -40,7 +40,7 @@ def make_dataset(N_train, N_valid, D):
     ys_train_score = torch.mm(X_train, ws)
     ys_valid_score = torch.mm(X_valid, ws)
 
-    bins = [0, 1]  # 5 relevances
+    bins = [0, 1]  # 2 relevances
     ys_train_rel = torch.Tensor(
         np.digitize(ys_train_score.clone().detach().numpy(), bins=bins)
     )

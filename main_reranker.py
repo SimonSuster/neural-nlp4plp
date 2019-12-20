@@ -68,6 +68,8 @@ def main():
     arg_parser.add_argument("--model", type=str, default="lstm-enc-dec", help=f"")
     arg_parser.add_argument("--model-path", type=str, help=f"saved model file to load")
     arg_parser.add_argument("--n-layers", type=int, default=1, help="number of layers for the RNN")
+    arg_parser.add_argument('--rank-feat-type', nargs='+', help="Which feature to use: TBD")
+    arg_parser.add_argument('--rank-discrete-feat-type', nargs='+', help="Which feature to use: score | rank. Score uses beam candidate score as a feature, rank uses the beam rank position.")
     arg_parser.add_argument("--ret-period", type=int, default=20,
                             help="stop training if no improvement in both acc and f1 during last 'ret-period' epochs")
     arg_parser.add_argument("--save-model", action="store_true")
@@ -217,6 +219,18 @@ def main():
                   'bidir': args.bidir,
                   'cuda': args.cuda
                   }
+    if args.rank_feat_type:
+        feature_encoder = Nlp4plpEncoder.feature_from_corpus(train_corp, dev_corp, feat_type=args.rank_feat_type)
+        net_params['feature_idx'] = feature_encoder.vocab.word2idx
+        net_params['feat_size'] = feature_encoder.vocab.size
+        net_params['feat_padding_idx'] = feature_encoder.vocab.pad
+        net_params['feat_emb_dim'] = args.feat_embed_size
+        net_params['feat_type'] = args.feat_type
+        net_params['feat_onehot'] = args.feat_onehot
+    if args.rank_discrete_feat_type:
+        net_params['discrete_feat_type'] = args.rank_discrete_feat_type
+
+
     classifier = LSTMClassifier(**net_params)
 
     optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)

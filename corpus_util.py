@@ -246,9 +246,10 @@ class Nlp4plpInst:
 
 
 class RerankerInst:
-    def __init__(self, cand, score, true, f):
+    def __init__(self, cand, score, rank, true, f):
         self.txt = cand  # basic input (candidate program tokens)
         self.score = score
+        self.rank = rank
         self.ans_discrete = int(cand == true)  # label (is candidate program correct or not)
         self.f = f  # file (problem) name
 
@@ -262,7 +263,7 @@ class RerankerData:
         insts = []
         for c, i in enumerate(labels_pred):
             for c2, cand in enumerate(i):
-                inst = RerankerInst(cand, pred_scores[c][c2], labels_true[c], fs[c])
+                inst = RerankerInst(cand, pred_scores[c][c2], c2, labels_true[c], fs[c])
                 insts.append(inst)
 
         return insts
@@ -1130,6 +1131,7 @@ class CorpusEncoder:
         labels = list()
         if return_scores:
             scores = []
+            ranks = []
 
         for inst in corpus.insts:
             cur_inst = self.encode_inst(inst.txt)
@@ -1138,27 +1140,29 @@ class CorpusEncoder:
             instances.append(cur_inst)
             if return_scores:
                 scores.append(inst.score)
+                ranks.append(inst.rank)
             if isinstance(inst.ans_discrete, str):
                 labels.append(self.encode_label(inst.ans_discrete))
             else:
                 labels.append(inst.ans_discrete)
             if len(instances) == batch_size:
                 if return_scores:
-                    yield (instances, labels, scores)
+                    yield (instances, labels, scores, ranks)
                 else:
                     yield (instances, labels)
                 instances = list()
                 labels = list()
                 if return_scores:
                     scores = list()
+                    ranks = list()
 
         if instances:
             if return_scores:
-                yield (instances, labels, scores)
+                yield (instances, labels, scores, ranks)
             else:
                 yield (instances, labels)
 
-    def batch_to_tensors(self, cur_insts, cur_labels, device, cur_scores=None):
+    def batch_to_tensors(self, cur_insts, cur_labels, device):
         '''
         Transforms an encoded batch to the corresponding torch tensor
         :return: tensor of batch padded to maxlen, and a tensor of actual instance lengths
@@ -1177,11 +1181,7 @@ class CorpusEncoder:
         lengths = torch.tensor(lengths, dtype=torch.int).to(device)
         labels = torch.LongTensor(cur_labels).to(device)
 
-        if cur_scores is not None:
-            scores = torch.FloatTensor(cur_scores).to(device)
-            return t, labels, lengths, scores
-        else:
-            return t, labels, lengths
+        return t, labels, lengths
 
     def decode_inst(self, inst):
         out = [self.vocab.idx2word[i] for i in inst if i != self.vocab.pad]
