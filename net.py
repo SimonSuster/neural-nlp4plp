@@ -1839,7 +1839,7 @@ class EncoderDecoder(nn.Module):
 
         return y_pred, y_pred_scores, y_true
 
-    def save(self, f_model='lstm_encdec.tar', dir_model='../out/'):
+    def save(self, f_model='lstm_encdec.tar', dir_model='models/'):
 
         net_params = {'n_layers': self.n_lstm_layers,
                       'hidden_dim': self.hidden_dim,
@@ -1875,7 +1875,7 @@ class EncoderDecoder(nn.Module):
         TorchUtils.save_model(state, f_model, dir_model)
 
     @classmethod
-    def load(cls, f_model='lstm_encdec.tar', dir_model='../out/'):
+    def load(cls, f_model='lstm_encdec.tar', dir_model='models/'):
 
         state = TorchUtils.load_model(f_model, dir_model)
         classifier = cls(**state['net_params'])

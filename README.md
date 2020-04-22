@@ -14,8 +14,12 @@ We use the data developed in the [nlp4plp project](https://dtai.cs.kuleuven.be/p
 - tested on numpy 1.15.4
 - tested on scikit-learn 0.20.1
 - tested on pytorch 0.4.1.post2
+- comet-ml
 
-
+Obtain the Comet-ml key by logging in on their website, and selecting a new project. Then:
+```
+export COMET_API_KEY="type-your-key"
+```
 ## Usage
 Train and evaluate the model
 
@@ -32,3 +36,11 @@ python3.7 main.py --data-dir /mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/
 ```
 
 Others TODO.
+
+### Re-ranking
+To train a re-ranker:
+```
+PYTHONHASHSEED=0 python3.6 main_reranker.py --data-dir resources/examples_splits_nums_mapped/ --embed-size 100 --ret-period 30 --feat-type pos rels num --beam-decoding --beam-width 5 --beam-topk 5 --model-path 20191118_151545_853074  --rank-discrete-feat-type score rank --lr 0.0001
+```
+
+This will obtain the predictions from a pre-trained base model (`-model-path`), then train a re-ranker based on those predictions. The prediction step uses a beam size of 5 and also keeps the 5 topmost predictions. The training of the re-ranking model simply consists of predicting for each prediction whether it is correct or not (independently of all others).   
