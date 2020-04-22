@@ -367,7 +367,7 @@ class LSTMClassifier(nn.Module):
 
         return y_pred, y_true
 
-    def save(self, f_model='lstm_classifier.tar', dir_model='../out/'):
+    def save(self, f_model='lstm_classifier.tar', dir_model='models/'):
 
         net_params = {'n_layers': self.n_lstm_layers,
                       'hidden_dim': self.hidden_dim,
@@ -393,7 +393,7 @@ class LSTMClassifier(nn.Module):
         TorchUtils.save_model(state, f_model, dir_model)
 
     @classmethod
-    def load(cls, f_model='lstm_classifier.tar', dir_model='../out/'):
+    def load(cls, f_model='lstm_classifier.tar', dir_model='models/'):
 
         state = TorchUtils.load_model(f_model, dir_model)
         classifier = cls(**state['net_params'])
@@ -501,7 +501,7 @@ class LSTMRegression(nn.Module):
 
         return y_pred, y_true
 
-    def save(self, f_model='lstm_regression.tar', dir_model='../out/'):
+    def save(self, f_model='lstm_regression.tar', dir_model='models/'):
 
         net_params = {'n_layers': self.n_lstm_layers,
                       'hidden_dim': self.hidden_dim,
@@ -524,7 +524,7 @@ class LSTMRegression(nn.Module):
         TorchUtils.save_model(state, f_model, dir_model)
 
     @classmethod
-    def load(cls, f_model='lstm_regression.tar', dir_model='../out/'):
+    def load(cls, f_model='lstm_regression.tar', dir_model='models/'):
 
         state = TorchUtils.load_model(f_model, dir_model)
         classifier = cls(**state['net_params'])
@@ -1378,7 +1378,7 @@ class PointerNet(nn.Module):
 
         return y_pred, y_true
 
-    def save(self, f_model='lstm_pointer.tar', dir_model='../out/'):
+    def save(self, f_model='lstm_pointer.tar', dir_model='models/'):
 
         net_params = {'n_layers': self.n_lstm_layers,
                       'hidden_dim': self.hidden_dim,
@@ -1407,7 +1407,7 @@ class PointerNet(nn.Module):
         TorchUtils.save_model(state, f_model, dir_model)
 
     @classmethod
-    def load(cls, f_model='lstm_pointer.tar', dir_model='../out/'):
+    def load(cls, f_model='lstm_pointer.tar', dir_model='models/'):
 
         state = TorchUtils.load_model(f_model, dir_model)
         classifier = cls(**state['net_params'])
@@ -1417,7 +1417,7 @@ class PointerNet(nn.Module):
 
 
 def write_att_plots(cur_insts, word_idx, labels, label_idx, outputs_att, log_name, ids):
-    dir_out = f"../out/log_w{log_name}/"
+    dir_out = f"models/log_w{log_name}/"
     if not os.path.exists(dir_out):
         os.makedirs(dir_out)
 
@@ -1885,7 +1885,7 @@ class EncoderDecoder(nn.Module):
 
     @classmethod
     def remove(cls, f_model='lstm_encdec.tar'):
-        os.remove("../out/" + f_model)
+        os.remove("models/" + f_model)
 
 
 class EncoderSplitDecoder(nn.Module):
@@ -2317,7 +2317,7 @@ class EncoderSplitDecoder(nn.Module):
             corpus_encoder.strip_until_eos(cur_labels.cpu().numpy()),
             corpus_encoder.strip_until_eos(cur_labels2.cpu().numpy()))
 
-    def save(self, f_model='lstm_encsplitdec.tar', dir_model='../out/'):
+    def save(self, f_model='lstm_encsplitdec.tar', dir_model='models/'):
 
         net_params = {'n_layers': self.n_lstm_layers,
                       'hidden_dim': self.hidden_dim,
@@ -2359,7 +2359,7 @@ class EncoderSplitDecoder(nn.Module):
         TorchUtils.save_model(state, f_model, dir_model)
 
     @classmethod
-    def load(cls, f_model='lstm_encsplitdec.tar', dir_model='../out/'):
+    def load(cls, f_model='lstm_encsplitdec.tar', dir_model='models/'):
 
         state = TorchUtils.load_model(f_model, dir_model)
         classifier = cls(**state['net_params'])
@@ -2369,7 +2369,7 @@ class EncoderSplitDecoder(nn.Module):
 
     @classmethod
     def remove(cls, f_model='lstm_encsplitdec.tar'):
-        os.remove("../out/" + f_model)
+        os.remove("models/" + f_model)
 
 
 class BeamSearchNode(object):

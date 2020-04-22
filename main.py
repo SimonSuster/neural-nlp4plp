@@ -38,7 +38,7 @@ def get_correct_problems(test_corp, y_pred, bin_edges):
     return correct
 
 
-def save_preds_encdec(corp, label_vocab, _y_true, _y_pred, f_name, dir_out="../out/"):
+def save_preds_encdec(corp, label_vocab, _y_true, _y_pred, f_name, dir_out="models/"):
     print("Saving predictions from the best model:")
     f_name = f"{f_name}.json"
     all = {}
@@ -73,7 +73,7 @@ def final_repl(n, num2n_map):
     return new_k
 
 
-def save_preds_encdec_pl(corp, _y_true, _y_pred, log_name, label_vocab=None, dir_out="../out/", beam_decoding=False):
+def save_preds_encdec_pl(corp, _y_true, _y_pred, log_name, label_vocab=None, dir_out="models/", beam_decoding=False):
     """ as a prolog program """
     print("Saving predictions from the best model:")
     dir_out = f"{dir_out}log_w{log_name}/"
@@ -490,7 +490,7 @@ def main():
 
             optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
 
-            print(os.path.abspath('../out/' + classifier.f_model))
+            print(os.path.abspath('models/' + classifier.f_model))
             best_dev_score, experiment = classifier.train_model(train_corp, dev_corp, corpus_encoder, feature_encoder, args.epochs, args.ret_period,
                                    optimizer, experiment)
             dev_score_runs.append((best_dev_score, f_model))
@@ -625,7 +625,7 @@ def main():
                                      label_vocab=corpus_encoder.label_vocab,
                                      beam_decoding=args.beam_decoding)
                 if args.run_solver:
-                    eval_solver(os.path.abspath(f"../out/log_w{classifier.f_model}/"), backoff=args.solver_backoff,
+                    eval_solver(os.path.abspath(f"models/log_w{classifier.f_model}/"), backoff=args.solver_backoff,
                                 backoff_constraint=args.solver_backoff_constraint, beam_decoding=args.beam_decoding, beam_width=args.beam_width)
             elif args.label_type_dec in {"full-pl-split", "full-pl-split-stat-dyn"}:
                 save_preds_encdec_pl(test_corp, _y_true, _y_pred, classifier.f_model)
