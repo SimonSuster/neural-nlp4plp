@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ChangeListManager">
+    <list default="true" id="701ff85f-17b9-4845-9a48-f7b5ebb9a59f" name="Default" comment="" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="CreatePatchCommitExecutor">
+    <option name="PATCH_PATH" value="" />
+  </component>
+  <component name="FavoritesManager">
+    <favorites_list name="neural-nlp4plp" />
+  </component>
+  <component name="ProjectId" id="1axP0RFJ3h9iAGk5bkg2P7SL6H8" />
+  <component name="ProjectInspectionProfilesVisibleTreeState">
+    <entry key="Project Default">
+      <profile-state>
+        <expanded-state>
+          <State>
+            <id />
+          </State>
+          <State>
+            <id>Spelling</id>
+          </State>
+        </expanded-state>
+        <selected-state>
+          <State>
+            <id>SpellCheckingInspection</id>
+          </State>
+        </selected-state>
+      </profile-state>
+    </entry>
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showExcludedFiles" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">
+    <property name="WebServerToolWindowFactoryState" value="true" />
+    <property name="last_opened_file_path" value="$PROJECT_DIR$" />
+    <property name="settings.editor.selected.configurable" value="com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable" />
+  </component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$" />
+    </key>
+  </component>
+  <component name="RunManager">
+    <configuration default="true" type="tests" factoryName="Attests">
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <module name="neural-nlp4plp" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" enabled="false" sample_coverage="true" runner="coverage.py" />
+      <option name="SCRIPT_NAME" value="" />
+      <option name="CLASS_NAME" value="" />
+      <option name="METHOD_NAME" value="" />
+      <option name="FOLDER_NAME" value="" />
+      <option name="TEST_TYPE" value="TEST_SCRIPT" />
+      <option name="PATTERN" value="" />
+      <option name="USE_PATTERN" value="false" />
+      <method />
+    </configuration>
+    <configuration default="true" type="PyBehaveRunConfigurationType" factoryName="Behave">
+      <module name="neural-nlp4plp" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="ADDITIONAL_ARGS" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="Unnamed" type="PythonConfigurationType" factoryName="Python">
+      <module name="neural-nlp4plp" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="$USER_HOME$/anaconda/envs/py36/bin/python" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="SCRIPT_NAME" value="" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration default="true" type="js.build_tools.gulp">
+      <node-interpreter>project</node-interpreter>
+      <node-options />
+      <gulpfile />
+      <tasks />
+      <arguments />
+      <envs />
+      <method v="2" />
+    </configuration>
+  </component>
+  <component name="SvnConfiguration">
+    <configuration />
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="701ff85f-17b9-4845-9a48-f7b5ebb9a59f" name="Default" comment="" />
+      <created>1587660168909</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1587660168909</updated>
+      <workItem from="1587674060532" duration="1531000" />
+      <workItem from="1587688422032" duration="13000" />
+      <workItem from="1588556704145" duration="978000" />
+      <workItem from="1589634190108" duration="2150000" />
+      <workItem from="1589729810090" duration="1195000" />
+      <workItem from="1589749950616" duration="3239000" />
+      <workItem from="1589805261654" duration="294000" />
+      <workItem from="1589881833768" duration="17296000" />
+      <workItem from="1589983241479" duration="2980000" />
+      <workItem from="1590047618317" duration="3790000" />
+      <workItem from="1590242900036" duration="188000" />
+      <workItem from="1590323546036" duration="5032000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="1" />
+  </component>
+  <component name="Vcs.Log.UiProperties">
+    <option name="RECENTLY_FILTERED_USER_GROUPS">
+      <collection />
+    </option>
+    <option name="RECENTLY_FILTERED_BRANCH_GROUPS">
+      <collection />
+    </option>
+  </component>
+  <component name="WindowStateProjectService">
+    <state x="350" y="24" key="#Deployment" timestamp="1589759895429">
+      <screen x="0" y="23" width="1440" height="833" />
+    </state>
+    <state x="350" y="24" key="#Deployment/0.23.1440.833@0.23.1440.833" timestamp="1589759895429" />
+    <state x="308" y="86" key="#Deployment/0.23.1440.836@0.23.1440.836" timestamp="1587674151984" />
+    <state x="383" y="150" key="#Options" timestamp="1589759790024">
+      <screen x="0" y="23" width="1440" height="833" />
+    </state>
+    <state x="383" y="150" key="#Options/0.23.1440.833@0.23.1440.833" timestamp="1589759790024" />
+    <state x="217" y="60" key="SettingsEditor" timestamp="1587674087909">
+      <screen x="0" y="23" width="1440" height="836" />
+    </state>
+    <state x="217" y="60" key="SettingsEditor/0.23.1440.836@0.23.1440.836" timestamp="1587674087909" />
+    <state x="389" y="323" key="com.intellij.ide.util.TipDialog" timestamp="1590323560667">
+      <screen x="0" y="23" width="1440" height="834" />
+    </state>
+    <state x="389" y="323" key="com.intellij.ide.util.TipDialog/0.23.1440.832@0.23.1440.832" timestamp="1590047767116" />
+    <state x="389" y="323" key="com.intellij.ide.util.TipDialog/0.23.1440.834@0.23.1440.834" timestamp="1590323560667" />
+    <state x="389" y="324" key="com.intellij.ide.util.TipDialog/0.23.1440.836@0.23.1440.836" timestamp="1590242908719" />
+    <state x="1959" y="404" key="com.intellij.ide.util.TipDialog/1440.23.1920.1057/0.23.1440.832@1440.23.1920.1057" timestamp="1589729810404" />
+    <state x="389" y="323" key="com.intellij.ide.util.TipDialog/1440.23.1920.1057/0.23.1440.833@0.23.1440.833" timestamp="1589881951429" />
+  </component>
+</project>
